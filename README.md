@@ -68,7 +68,7 @@ Copy-Item .env.example .env
 docker compose up --build
 ```
 
-The Compose configuration publishes:
+The Compose configuration publishes only on `127.0.0.1` by default:
 
 - FTP control: `21/tcp`
 - Passive data: `30000-30009/tcp`
@@ -80,7 +80,9 @@ curl.exe --user "ftpuser:87654321" "ftp://127.0.0.1/"
 curl.exe --user "ftpuser:87654321" "ftp://127.0.0.1/pub/README.txt"
 ```
 
-For a remote deployment, set `TRAP21_PUBLIC_HOST` in `.env` to the IPv4 address clients use to reach the honeypot. Passive FTP will fail if this value points to an internal container address.
+For an authorized remote deployment, explicitly set both `TRAP21_LISTEN_HOST=0.0.0.0` and `TRAP21_PUBLIC_HOST=<public IPv4>` in `.env`. The first value controls the host interfaces Docker publishes; the second is the address returned by `PASV`. Passive FTP will fail if the public host points to an internal container address.
+
+Compose stores telemetry and quarantine data in the named volume `trap21-data`, preserving the image's non-root ownership. Use `docker compose down -v` only when you intentionally want to delete that evidence volume.
 
 Stop the service:
 
@@ -159,13 +161,13 @@ Events are appended to `data/events.jsonl`:
 {"timestamp":"2026-07-17T16:43:01Z","eventType":"UPLOAD","sessionId":"...","sourceIp":"192.0.2.45","username":"ftpuser","command":"STOR","path":"/incoming/probe.txt","bytes":2941,"sha256":"...","quarantineFile":"...","status":"CAPTURED"}
 ```
 
-Attempted passwords are intentionally captured in plaintext because they are honeypot telemetry. Protect the data directory, restrict operator access, define retention, and treat accidental use of real credentials as sensitive data.
+Attempted passwords are intentionally captured in plaintext because they are honeypot telemetry. Protect the data directory, restrict operator access, and treat accidental use of real credentials as sensitive data. The active log rotates at the configured size and retains a bounded number of archives.
 
 ## Upload quarantine
 
 Uploaded bytes are written beneath `data/quarantine/<session-id>/`. The virtual tree receives only a placeholder and metadata mapping, allowing the FTP client to list and retrieve the captured upload during the running process.
 
-TRAP21 never executes, parses, unpacks, or forwards uploaded content. Deleting a file through FTP removes its virtual presence but preserves the captured quarantine artifact.
+TRAP21 never executes, parses, unpacks, or forwards uploaded content. Deleting a file through FTP removes its virtual presence but preserves the captured quarantine artifact. Quarantine growth is bounded by total bytes and file count; expired historical artifacts are pruned according to the retention period.
 
 ## Configuration
 
@@ -178,9 +180,16 @@ TRAP21 never executes, parses, unpacks, or forwards uploaded content. Deleting a
 | `TRAP21_PUBLIC_HOST` | control address | IPv4 advertised by `PASV` |
 | `TRAP21_DATA_DIR` | `data` | VFS, telemetry, and quarantine root |
 | `TRAP21_IDLE_TIMEOUT` | `120` | Control idle timeout in seconds |
+| `TRAP21_COMMAND_TIMEOUT` | `15` | Absolute time to finish a command after its first byte |
 | `TRAP21_DATA_TIMEOUT` | `15` | Data connection timeout in seconds |
 | `TRAP21_MAX_UPLOAD_BYTES` | `10485760` | Maximum upload size |
+| `TRAP21_MAX_QUARANTINE_BYTES` | `268435456` | Total retained quarantine-byte limit |
+| `TRAP21_MAX_QUARANTINE_FILES` | `4096` | Total retained quarantine-file limit |
+| `TRAP21_RETENTION_DAYS` | `30` | Age limit for historical quarantine artifacts |
+| `TRAP21_MAX_EVENT_LOG_BYTES` | `33554432` | Rotate the active JSONL log at this size |
+| `TRAP21_MAX_EVENT_ARCHIVES` | `5` | Rotated JSONL archives to retain |
 | `TRAP21_MAX_SESSIONS` | `64` | Concurrent session limit |
+| `TRAP21_MAX_SESSIONS_PER_IP` | `8` | Concurrent sessions allowed per source address |
 
 ## Validation
 
@@ -198,8 +207,10 @@ The integration test starts the Java server on ephemeral ports and verifies:
 - `EPSV`, `LIST`, `RETR`, `STOR`, and append-correct `APPE` transfers.
 - `TYPE A` line-ending conversion and an in-progress `ABOR`.
 - Upload quarantine and exact SHA-256 telemetry values.
+- Quarantine quotas, retention, and JSONL rotation.
+- Absolute command deadlines and per-source session limits.
 - JSONL credential and upload events.
-- Virtual path normalization and symbolic-link rejection.
+- Virtual path normalization, symbolic-link rejection, and captured-file directory renames.
 
 ## Legal and operational safety
 

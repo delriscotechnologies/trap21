@@ -30,10 +30,18 @@ $MainSources = Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'src\main\java
 $TestSources = Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'src\test\java') -Recurse -Filter '*.java' |
     Select-Object -ExpandProperty FullName
 
-& $JavacPath --release 21 -encoding UTF-8 -Xlint:all -d $MainOutput @MainSources
+$MainArguments = @('--release', '21', '-encoding', 'UTF-8', '-Xlint:all', '-d', $MainOutput) + $MainSources
+& $JavacPath @MainArguments
 if ($LASTEXITCODE -ne 0) { throw 'Main compilation failed.' }
 
-& $JavacPath --release 21 -encoding UTF-8 -Xlint:all -cp $MainOutput -d $TestOutput @TestSources
+$TestArguments = @(
+    '--release', '21',
+    '-encoding', 'UTF-8',
+    '-Xlint:all',
+    '-cp', $MainOutput,
+    '-d', $TestOutput
+) + $TestSources
+& $JavacPath @TestArguments
 if ($LASTEXITCODE -ne 0) { throw 'Test compilation failed.' }
 
 $JarFile = Join-Path $BuildRoot 'trap21.jar'

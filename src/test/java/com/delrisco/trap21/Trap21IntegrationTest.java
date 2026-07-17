@@ -2,6 +2,7 @@ package com.delrisco.trap21;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -12,11 +13,16 @@ import java.nio.file.FileSystemException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Comparator;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -44,9 +50,16 @@ public final class Trap21IntegrationTest {
                 "127.0.0.1",
                 temporary,
                 10,
+                3,
                 5,
                 1024 * 1024,
-                8);
+                16L * 1024 * 1024,
+                100,
+                30,
+                1024 * 1024,
+                3,
+                8,
+                4);
 
         try (Trap21Server server = new Trap21Server(config)) {
             server.start();
@@ -54,6 +67,9 @@ public final class Trap21IntegrationTest {
             testInvalidCredentials(server.port());
             testAnonymousIsolation(server.port());
             testSymbolicLinkIsolation(server.port(), temporary, outside);
+            testCapturedDirectoryRename(server.port());
+            testCommandDeadline(server.port());
+            testPerSourceSessionLimit(server.port());
         }
 
         assertTrue(Files.exists(temporary.resolve("events.jsonl")), "events.jsonl was not created");
@@ -79,6 +95,9 @@ public final class Trap21IntegrationTest {
 
         assertEquals("/Windows/System32", VirtualFileSystem.normalizeVirtualPath("../../../../Windows/System32"));
         assertTrue(!Files.exists(temporary.resolve("Windows")), "Traversal created a path outside the virtual root");
+
+        testStorageQuotaAndRetention();
+        testEventLogRotation();
 
         deleteRecursively(temporary);
         deleteRecursively(outside);
@@ -171,6 +190,82 @@ public final class Trap21IntegrationTest {
 
         assertTrue(!Files.exists(outside.resolve("created.txt")), "Upload escaped through a symbolic link");
         assertTrue(!Files.exists(outside.resolve("created")), "Directory creation escaped through a symbolic link");
+    }
+
+    private static void testCapturedDirectoryRename(int port) throws Exception {
+        try (FtpClient client = new FtpClient(port)) {
+            client.expectReply(220);
+            client.expect("USER admin", 331);
+            client.expect("PASS admin123", 230);
+            client.expect("MKD /users/admin/rename-source", 257);
+            client.uploadData("STOR /users/admin/rename-source/probe.txt", INITIAL_UPLOAD);
+            client.expect("RNFR /users/admin/rename-source", 350);
+            client.expect("RNTO /users/admin/rename-target", 250);
+            assertEquals(INITIAL_UPLOAD, client.downloadData("RETR /users/admin/rename-target/probe.txt"));
+            client.expect("QUIT", 221);
+        }
+    }
+
+    private static void testCommandDeadline(int port) throws Exception {
+        try (FtpClient client = new FtpClient(port)) {
+            client.expectReply(220);
+            client.sendPartial("NO");
+            client.expectReply(421);
+        }
+    }
+
+    private static void testPerSourceSessionLimit(int port) throws Exception {
+        Thread.sleep(200);
+        List<FtpClient> clients = new ArrayList<>();
+        try {
+            for (int index = 0; index < 4; index++) {
+                FtpClient client = new FtpClient(port);
+                client.expectReply(220);
+                clients.add(client);
+            }
+            try (FtpClient rejected = new FtpClient(port)) {
+                rejected.expectReply(421);
+            }
+        } finally {
+            for (FtpClient client : clients) {
+                client.close();
+            }
+        }
+    }
+
+    private static void testStorageQuotaAndRetention() throws Exception {
+        Path temporary = Files.createTempDirectory("trap21-storage-");
+        Path expired = temporary.resolve("quarantine/expired/old.bin");
+        Files.createDirectories(expired.getParent());
+        Files.writeString(expired, "expired", StandardCharsets.UTF_8);
+        Files.setLastModifiedTime(expired, FileTime.from(Instant.now().minus(Duration.ofDays(31))));
+
+        VirtualFileSystem fileSystem = new VirtualFileSystem(temporary, 64, 2, 30);
+        assertTrue(!Files.exists(expired), "Expired quarantine artifact was not pruned");
+        byte[] content = "x".repeat(32).getBytes(StandardCharsets.UTF_8);
+        fileSystem.capture("quota-a", "/incoming/a.bin", new ByteArrayInputStream(content), 32, false);
+        fileSystem.capture("quota-b", "/incoming/b.bin", new ByteArrayInputStream(content), 32, false);
+        boolean rejected = false;
+        try {
+            fileSystem.capture("quota-c", "/incoming/c.bin", new ByteArrayInputStream(content), 32, false);
+        } catch (VirtualFileSystem.StorageQuotaExceededException expected) {
+            rejected = true;
+        }
+        assertTrue(rejected, "Quarantine quota did not reject an additional upload");
+        deleteRecursively(temporary);
+    }
+
+    private static void testEventLogRotation() throws Exception {
+        Path temporary = Files.createTempDirectory("trap21-logging-");
+        Path eventLog = temporary.resolve("events.jsonl");
+        try (JsonlEventLogger logger = new JsonlEventLogger(eventLog, 256, 2)) {
+            for (int index = 0; index < 20; index++) {
+                logger.log("ROTATION_TEST", Map.of("index", index, "payload", "x".repeat(80)));
+            }
+        }
+        assertTrue(Files.exists(temporary.resolve("events.jsonl.1")), "Event log was not rotated");
+        assertTrue(!Files.exists(temporary.resolve("events.jsonl.3")), "Too many event archives were retained");
+        deleteRecursively(temporary);
     }
 
     private static void deleteRecursively(Path target) throws IOException {
@@ -311,6 +406,11 @@ public final class Trap21IntegrationTest {
         private void send(String command) throws IOException {
             writer.write(command);
             writer.write("\r\n");
+            writer.flush();
+        }
+
+        private void sendPartial(String commandFragment) throws IOException {
+            writer.write(commandFragment);
             writer.flush();
         }
 

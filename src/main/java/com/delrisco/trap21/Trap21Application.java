@@ -27,6 +27,10 @@ public final class Trap21Application {
         System.out.printf("Virtual root      : %s%n", config.dataDirectory().resolve("vfs").toAbsolutePath().normalize());
         System.out.printf("Event log         : %s%n", config.dataDirectory().resolve("events.jsonl").toAbsolutePath().normalize());
         System.out.printf("Upload quarantine : %s%n", config.dataDirectory().resolve("quarantine").toAbsolutePath().normalize());
+        System.out.printf("Quarantine limits : %d bytes / %d files / %d days%n",
+                config.maxQuarantineBytes(), config.maxQuarantineFiles(), config.retentionDays());
+        System.out.printf("Session limits    : %d total / %d per source%n",
+                config.maxSessions(), config.maxSessionsPerIp());
         System.out.println("Status            : listening");
         System.out.println();
     }
