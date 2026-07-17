@@ -373,7 +373,7 @@ final class ClientSession {
                 }
                 output.flush();
             }
-            if (state.tryComplete()) {
+            if (completeTransfer(state)) {
                 send(226, "Transfer complete.");
                 log("LIST", Map.of("path", target, "entries", entries.size(), "bytes", bytes));
             }
@@ -409,7 +409,7 @@ final class ClientSession {
                 bytes = copy(input, output);
                 output.flush();
             }
-            if (state.tryComplete()) {
+            if (completeTransfer(state)) {
                 send(226, "Transfer complete.");
                 log("DOWNLOAD", Map.of("path", target, "bytes", bytes, "status", "SUCCESS"));
             }
@@ -425,6 +425,7 @@ final class ClientSession {
                 send(550, "Permission denied.");
                 return true;
             }
+            fileSystem.validatePath(target);
         } catch (IOException exception) {
             send(550, "Invalid target path.");
             return true;
@@ -601,7 +602,7 @@ final class ClientSession {
             try (data) {
                 task.run(state);
             } catch (IOException exception) {
-                if (state.tryComplete()) {
+                if (completeTransfer(state)) {
                     try {
                         send(426, "Connection closed; transfer aborted.");
                     } catch (IOException ignored) {
@@ -612,7 +613,7 @@ final class ClientSession {
                             "message", String.valueOf(exception.getMessage())));
                 }
             } catch (RuntimeException exception) {
-                if (state.tryComplete()) {
+                if (completeTransfer(state)) {
                     try {
                         send(451, "Requested action aborted; local error in processing.");
                     } catch (IOException ignored) {
@@ -651,7 +652,7 @@ final class ClientSession {
                     input,
                     config.maxUploadBytes(),
                     "APPE".equals(command));
-            if (state.tryComplete()) {
+            if (completeTransfer(state)) {
                 send(226, "Transfer complete.");
                 log("UPLOAD", Map.of(
                         "command", command,
@@ -662,22 +663,22 @@ final class ClientSession {
                         "status", "CAPTURED"));
             }
         } catch (VirtualFileSystem.UploadTooLargeException exception) {
-            if (state.tryComplete()) {
+            if (completeTransfer(state)) {
                 send(552, "Requested file action aborted; file limit exceeded.");
                 log("UPLOAD", Map.of("path", target, "status", "FILE_LIMIT_EXCEEDED"));
             }
         } catch (VirtualFileSystem.StorageQuotaExceededException exception) {
-            if (state.tryComplete()) {
+            if (completeTransfer(state)) {
                 send(452, "Requested action not taken; quarantine capacity exceeded.");
                 log("UPLOAD", Map.of("path", target, "status", "QUARANTINE_LIMIT_EXCEEDED"));
             }
         } catch (FileAlreadyExistsException exception) {
-            if (state.tryComplete()) {
+            if (completeTransfer(state)) {
                 send(550, "Target file cannot be replaced.");
                 log("UPLOAD", Map.of("path", target, "status", "REJECTED"));
             }
         } catch (IOException exception) {
-            if (state.tryComplete()) {
+            if (completeTransfer(state)) {
                 send(426, "Connection closed; transfer aborted.");
                 log("UPLOAD", Map.of(
                         "path", target,
@@ -698,6 +699,14 @@ final class ClientSession {
         return total;
     }
 
+    private boolean completeTransfer(TransferState state) {
+        if (!state.tryComplete()) {
+            return false;
+        }
+        activeTransfer.compareAndSet(state, null);
+        return true;
+    }
+
     private boolean transferInProgress() {
         return activeTransfer.get() != null;
     }
@@ -716,10 +725,6 @@ final class ClientSession {
         if (worker != null) {
             worker.interrupt();
         }
-        if (reply) {
-            send(426, "Connection closed; transfer aborted.");
-            send(226, "Abort command successful.");
-        }
         if (worker != null) {
             try {
                 worker.join(1_000);
@@ -728,6 +733,10 @@ final class ClientSession {
             }
         }
         activeTransfer.compareAndSet(state, null);
+        if (reply) {
+            send(426, "Connection closed; transfer aborted.");
+            send(226, "Abort command successful.");
+        }
         return true;
     }
 
