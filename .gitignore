@@ -1,0 +1,21 @@
+# Build outputs
+build/
+*.class
+*.jar
+
+# Runtime telemetry and captured files
+data/*
+!data/.gitkeep
+
+# Local configuration
+.env
+*.local
+
+# IDE and OS noise
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Local tools
+.tools/

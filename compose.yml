@@ -1,0 +1,23 @@
+services:
+  trap21:
+    build:
+      context: .
+      target: runtime
+    container_name: trap21
+    restart: unless-stopped
+    environment:
+      TRAP21_PUBLIC_HOST: ${TRAP21_PUBLIC_HOST:-127.0.0.1}
+      TRAP21_MAX_UPLOAD_BYTES: ${TRAP21_MAX_UPLOAD_BYTES:-10485760}
+      TRAP21_MAX_SESSIONS: ${TRAP21_MAX_SESSIONS:-64}
+    ports:
+      - "21:2121"
+      - "30000-30009:30000-30009"
+    volumes:
+      - ./data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
