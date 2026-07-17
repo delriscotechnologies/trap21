@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -26,14 +27,22 @@ public final class Trap21Server implements AutoCloseable {
     private final Semaphore capacity;
     private final AtomicBoolean running = new AtomicBoolean();
     private final Set<Socket> activeSockets = ConcurrentHashMap.newKeySet();
+    private final Map<String, AtomicInteger> sessionsBySource = new ConcurrentHashMap<>();
     private ServerSocket controlListener;
     private Thread acceptThread;
 
     public Trap21Server(Trap21Config config) throws IOException {
         this.config = config;
         this.credentials = new CredentialStore();
-        this.fileSystem = new VirtualFileSystem(config.dataDirectory());
-        this.logger = new JsonlEventLogger(config.dataDirectory().resolve("events.jsonl"));
+        this.fileSystem = new VirtualFileSystem(
+                config.dataDirectory(),
+                config.maxQuarantineBytes(),
+                config.maxQuarantineFiles(),
+                config.retentionDays());
+        this.logger = new JsonlEventLogger(
+                config.dataDirectory().resolve("events.jsonl"),
+                config.maxEventLogBytes(),
+                config.maxEventArchives());
         this.sessions = Executors.newVirtualThreadPerTaskExecutor();
         this.capacity = new Semaphore(config.maxSessions());
     }
@@ -76,24 +85,37 @@ public final class Trap21Server implements AutoCloseable {
         while (running.get()) {
             try {
                 Socket socket = controlListener.accept();
-                if (!capacity.tryAcquire()) {
-                    rejectBusy(socket);
+                if (!acquireCapacity(socket)) {
                     continue;
                 }
+                String sourceIp = socket.getInetAddress().getHostAddress();
                 activeSockets.add(socket);
-                sessions.submit(() -> {
-                    try (socket) {
-                        new ClientSession(config, socket, credentials, fileSystem, logger).run();
-                    } catch (Exception exception) {
-                        Map<String, Object> event = new LinkedHashMap<>();
-                        event.put("error", exception.getClass().getSimpleName());
-                        event.put("message", exception.getMessage());
-                        logger.log("SESSION_FAILURE", event);
-                    } finally {
-                        activeSockets.remove(socket);
-                        capacity.release();
+                try {
+                    sessions.submit(() -> {
+                        try (socket) {
+                            new ClientSession(config, socket, credentials, fileSystem, logger).run();
+                        } catch (Exception exception) {
+                            Map<String, Object> event = new LinkedHashMap<>();
+                            event.put("error", exception.getClass().getSimpleName());
+                            event.put("message", exception.getMessage());
+                            logger.log("SESSION_FAILURE", event);
+                        } finally {
+                            activeSockets.remove(socket);
+                            releaseSource(sourceIp);
+                            capacity.release();
+                        }
+                    });
+                } catch (RuntimeException exception) {
+                    activeSockets.remove(socket);
+                    releaseSource(sourceIp);
+                    capacity.release();
+                    socket.close();
+                    if (running.get()) {
+                        logger.log("SESSION_REJECTED", Map.of(
+                                "reason", "executor",
+                                "sourceIp", sourceIp));
                     }
-                });
+                }
             } catch (IOException exception) {
                 if (running.get()) {
                     logger.log("LISTENER_FAILURE", Map.of("message", String.valueOf(exception.getMessage())));
@@ -102,7 +124,27 @@ public final class Trap21Server implements AutoCloseable {
         }
     }
 
-    private void rejectBusy(Socket socket) {
+    private boolean acquireCapacity(Socket socket) {
+        String sourceIp = socket.getInetAddress().getHostAddress();
+        if (!capacity.tryAcquire()) {
+            rejectBusy(socket, "capacity", sourceIp);
+            return false;
+        }
+        AtomicInteger sourceSessions = sessionsBySource.computeIfAbsent(sourceIp, ignored -> new AtomicInteger());
+        if (sourceSessions.incrementAndGet() > config.maxSessionsPerIp()) {
+            releaseSource(sourceIp);
+            capacity.release();
+            rejectBusy(socket, "source_capacity", sourceIp);
+            return false;
+        }
+        return true;
+    }
+
+    private void releaseSource(String sourceIp) {
+        sessionsBySource.computeIfPresent(sourceIp, (ignored, count) -> count.decrementAndGet() <= 0 ? null : count);
+    }
+
+    private void rejectBusy(Socket socket, String reason, String sourceIp) {
         try (socket;
                 BufferedWriter writer = new BufferedWriter(
                         new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8))) {
@@ -111,7 +153,7 @@ public final class Trap21Server implements AutoCloseable {
         } catch (IOException ignored) {
             // The peer may disconnect before the overload response is written.
         }
-        logger.log("SESSION_REJECTED", Map.of("reason", "capacity"));
+        logger.log("SESSION_REJECTED", Map.of("reason", reason, "sourceIp", sourceIp));
     }
 
     @Override

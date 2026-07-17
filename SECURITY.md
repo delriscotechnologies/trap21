@@ -25,3 +25,5 @@ Report security issues privately through the repository's GitHub Security Adviso
 - Apply network egress controls outside the container.
 - Never expose Docker Engine, the host filesystem, or production credentials to the container.
 - Assume `events.jsonl` and quarantine artifacts contain sensitive or hostile content.
+- Keep the quarantine, file-count, event-log, and per-source session limits enabled.
+- Treat `TRAP21_LISTEN_HOST=0.0.0.0` as an explicit exposure decision; the default Compose binding is localhost only.

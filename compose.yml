@@ -8,12 +8,19 @@ services:
     environment:
       TRAP21_PUBLIC_HOST: ${TRAP21_PUBLIC_HOST:-127.0.0.1}
       TRAP21_MAX_UPLOAD_BYTES: ${TRAP21_MAX_UPLOAD_BYTES:-10485760}
+      TRAP21_MAX_QUARANTINE_BYTES: ${TRAP21_MAX_QUARANTINE_BYTES:-268435456}
+      TRAP21_MAX_QUARANTINE_FILES: ${TRAP21_MAX_QUARANTINE_FILES:-4096}
+      TRAP21_RETENTION_DAYS: ${TRAP21_RETENTION_DAYS:-30}
+      TRAP21_MAX_EVENT_LOG_BYTES: ${TRAP21_MAX_EVENT_LOG_BYTES:-33554432}
+      TRAP21_MAX_EVENT_ARCHIVES: ${TRAP21_MAX_EVENT_ARCHIVES:-5}
       TRAP21_MAX_SESSIONS: ${TRAP21_MAX_SESSIONS:-64}
+      TRAP21_MAX_SESSIONS_PER_IP: ${TRAP21_MAX_SESSIONS_PER_IP:-8}
+      TRAP21_COMMAND_TIMEOUT: ${TRAP21_COMMAND_TIMEOUT:-15}
     ports:
-      - "21:2121"
-      - "30000-30009:30000-30009"
+      - "${TRAP21_LISTEN_HOST:-127.0.0.1}:21:2121"
+      - "${TRAP21_LISTEN_HOST:-127.0.0.1}:30000-30009:30000-30009"
     volumes:
-      - ./data:/app/data
+      - trap21-data:/app/data
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -21,3 +28,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
+
+volumes:
+  trap21-data:

@@ -13,6 +13,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Comparator;
@@ -21,6 +22,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
@@ -46,11 +48,32 @@ final class VirtualFileSystem {
         }
     }
 
+    static final class StorageQuotaExceededException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        StorageQuotaExceededException(long maximumBytes, int maximumFiles) {
+            super("Quarantine capacity is limited to " + maximumBytes + " bytes and " + maximumFiles + " files");
+        }
+    }
+
     private final Path root;
     private final Path quarantine;
+    private final long maxQuarantineBytes;
+    private final int maxQuarantineFiles;
+    private final int retentionDays;
     private final Map<String, CapturedUpload> uploads = new ConcurrentHashMap<>();
+    private long quarantineBytes;
+    private int quarantineFiles;
+    private Instant nextPruneAt = Instant.EPOCH;
 
-    VirtualFileSystem(Path dataDirectory) throws IOException {
+    VirtualFileSystem(
+            Path dataDirectory,
+            long maxQuarantineBytes,
+            int maxQuarantineFiles,
+            int retentionDays) throws IOException {
+        this.maxQuarantineBytes = maxQuarantineBytes;
+        this.maxQuarantineFiles = maxQuarantineFiles;
+        this.retentionDays = retentionDays;
         Path normalizedData = dataDirectory.toAbsolutePath().normalize();
         Files.createDirectories(normalizedData);
         Path realData = normalizedData.toRealPath();
@@ -64,6 +87,7 @@ final class VirtualFileSystem {
         rejectSymbolicLinksInTree(quarantine);
         SeedData.populate(root);
         rejectSymbolicLinksInTree(root);
+        pruneExpiredQuarantine(true);
     }
 
     Path root() {
@@ -162,12 +186,17 @@ final class VirtualFileSystem {
                 : Files.getLastModifiedTime(toHostPath(virtualPath), LinkOption.NOFOLLOW_LINKS).toInstant();
     }
 
-    CapturedUpload capture(
+    synchronized CapturedUpload capture(
             String sessionId,
             String virtualPath,
             InputStream input,
             long maximumBytes,
             boolean append) throws IOException {
+        pruneExpiredQuarantine(false);
+        if (quarantineFiles >= maxQuarantineFiles || quarantineBytes >= maxQuarantineBytes) {
+            throw new StorageQuotaExceededException(maxQuarantineBytes, maxQuarantineFiles);
+        }
+        long remainingQuarantineBytes = maxQuarantineBytes - quarantineBytes;
         Path visiblePath = toHostPath(virtualPath);
         Path parent = visiblePath.getParent();
         if (parent == null || !Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS)) {
@@ -207,17 +236,26 @@ final class VirtualFileSystem {
                 LinkOption.NOFOLLOW_LINKS)) {
             if (appendSource != null) {
                 try (InputStream existing = Files.newInputStream(appendSource, LinkOption.NOFOLLOW_LINKS)) {
-                    total = copyLimited(existing, output, digest, total, maximumBytes);
+                    total = copyLimited(
+                            existing, output, digest, total, maximumBytes, remainingQuarantineBytes,
+                            maxQuarantineBytes, maxQuarantineFiles);
                 }
             }
-            total = copyLimited(input, output, digest, total, maximumBytes);
+            total = copyLimited(
+                    input, output, digest, total, maximumBytes, remainingQuarantineBytes,
+                    maxQuarantineBytes, maxQuarantineFiles);
         } catch (IOException exception) {
             Files.deleteIfExists(capturedPath);
             throw exception;
         }
 
-        if (!visibleExists) {
-            Files.createFile(visiblePath);
+        try {
+            if (!visibleExists) {
+                Files.createFile(visiblePath);
+            }
+        } catch (IOException exception) {
+            Files.deleteIfExists(capturedPath);
+            throw exception;
         }
         CapturedUpload upload = new CapturedUpload(
                 virtualPath,
@@ -227,6 +265,8 @@ final class VirtualFileSystem {
                 HexFormat.of().formatHex(digest.digest()),
                 Instant.now());
         uploads.put(virtualPath, upload);
+        quarantineBytes += total;
+        quarantineFiles++;
         return upload;
     }
 
@@ -251,7 +291,7 @@ final class VirtualFileSystem {
         Files.delete(visible);
     }
 
-    void rename(String sourceVirtual, String targetVirtual) throws IOException {
+    synchronized void rename(String sourceVirtual, String targetVirtual) throws IOException {
         Path source = toHostPath(sourceVirtual);
         Path target = toHostPath(targetVirtual);
         if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)) {
@@ -261,17 +301,27 @@ final class VirtualFileSystem {
             throw new NoSuchFileException(parent(targetVirtual));
         }
         validateFileName(fileName(targetVirtual));
+        boolean directory = Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS);
         Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
-        CapturedUpload captured = uploads.remove(sourceVirtual);
-        if (captured != null) {
-            uploads.put(targetVirtual, new CapturedUpload(
-                    targetVirtual,
-                    captured.quarantineFile(),
-                    fileName(targetVirtual),
-                    captured.size(),
-                    captured.sha256(),
-                    captured.capturedAt()));
+        String descendantPrefix = sourceVirtual + "/";
+        Map<String, CapturedUpload> moved = new LinkedHashMap<>();
+        for (Map.Entry<String, CapturedUpload> entry : uploads.entrySet()) {
+            String path = entry.getKey();
+            if (path.equals(sourceVirtual) || directory && path.startsWith(descendantPrefix)) {
+                String suffix = path.substring(sourceVirtual.length());
+                String movedPath = targetVirtual + suffix;
+                CapturedUpload captured = entry.getValue();
+                moved.put(movedPath, new CapturedUpload(
+                        movedPath,
+                        captured.quarantineFile(),
+                        fileName(movedPath),
+                        captured.size(),
+                        captured.sha256(),
+                        captured.capturedAt()));
+                uploads.remove(path, captured);
+            }
         }
+        uploads.putAll(moved);
     }
 
     static String normalizeVirtualPath(String raw) throws IOException {
@@ -366,7 +416,10 @@ final class VirtualFileSystem {
             OutputStream output,
             MessageDigest digest,
             long initialBytes,
-            long maximumBytes) throws IOException {
+            long maximumBytes,
+            long remainingQuarantineBytes,
+            long maximumQuarantineBytes,
+            int maximumQuarantineFiles) throws IOException {
         long total = initialBytes;
         byte[] buffer = new byte[16 * 1024];
         int count;
@@ -375,10 +428,62 @@ final class VirtualFileSystem {
             if (total > maximumBytes) {
                 throw new UploadTooLargeException(maximumBytes);
             }
+            if (total > remainingQuarantineBytes) {
+                throw new StorageQuotaExceededException(maximumQuarantineBytes, maximumQuarantineFiles);
+            }
             digest.update(buffer, 0, count);
             output.write(buffer, 0, count);
         }
         return total;
+    }
+
+    private void pruneExpiredQuarantine(boolean force) throws IOException {
+        Instant now = Instant.now();
+        if (!force && now.isBefore(nextPruneAt)) {
+            return;
+        }
+        Instant cutoff = now.minus(Duration.ofDays(retentionDays));
+        Set<Path> activeCaptures = uploads.values().stream()
+                .map(CapturedUpload::quarantineFile)
+                .map(path -> path.toAbsolutePath().normalize())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        try (Stream<Path> paths = Files.walk(quarantine)) {
+            for (Path path : paths.filter(Files::isRegularFile).toList()) {
+                Path normalized = path.toAbsolutePath().normalize();
+                if (!activeCaptures.contains(normalized)
+                        && Files.getLastModifiedTime(path, LinkOption.NOFOLLOW_LINKS).toInstant().isBefore(cutoff)) {
+                    Files.deleteIfExists(path);
+                }
+            }
+        }
+        try (Stream<Path> paths = Files.walk(quarantine)) {
+            for (Path directory : paths
+                    .filter(path -> !path.equals(quarantine))
+                    .filter(path -> Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS))
+                    .sorted(Comparator.reverseOrder())
+                    .toList()) {
+                try {
+                    Files.deleteIfExists(directory);
+                } catch (DirectoryNotEmptyException ignored) {
+                    // Retained artifacts keep their session directory.
+                }
+            }
+        }
+        refreshQuarantineUsage();
+        nextPruneAt = now.plus(Duration.ofHours(1));
+    }
+
+    private void refreshQuarantineUsage() throws IOException {
+        long bytes = 0;
+        int files = 0;
+        try (Stream<Path> paths = Files.walk(quarantine)) {
+            for (Path path : paths.filter(Files::isRegularFile).toList()) {
+                bytes = Math.addExact(bytes, Files.size(path));
+                files = Math.addExact(files, 1);
+            }
+        }
+        quarantineBytes = bytes;
+        quarantineFiles = files;
     }
 
     private static String childVirtualPath(String directory, String name) {
