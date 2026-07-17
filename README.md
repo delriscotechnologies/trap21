@@ -34,7 +34,7 @@ TRAP21 does not expose its product name, honeypot purpose, Java implementation, 
 - Different filesystem visibility for each account profile.
 - Seeded enterprise-style directories and decoy documents.
 - Upload capture with size limits and SHA-256 hashes.
-- Host-isolated virtual filesystem with normalized paths.
+- Dedicated virtual filesystem with normalized paths and symbolic-link rejection.
 - Source-address validation for passive data connections.
 - Bounded command length, idle timeouts, and session limits.
 - JSONL events for connections, credentials, commands, downloads, and uploads.
@@ -128,7 +128,7 @@ TRAP21 seeds a virtual tree beneath `data/vfs`:
 
 Transfer accounts can see `/incoming`, `/outgoing`, `/pub`, and an intentionally leaked `/archive/completed`. Backup, operations, service, guest, and anonymous accounts each receive different views. Administrator accounts can explore the entire virtual tree.
 
-Paths such as `../../../../Windows/System32` normalize inside the virtual root. They never resolve against the host filesystem.
+Paths such as `../../../../Windows/System32` normalize inside the virtual root. TRAP21 also rejects symbolic links anywhere beneath the virtual filesystem or quarantine tree. The containment boundary still depends on mounting only the dedicated data directory and preventing untrusted local processes from modifying it while the server is running.
 
 ## FTP commands
 
@@ -144,6 +144,8 @@ RNFR RNTO STAT ABOR
 ```
 
 Active data mode (`PORT` and `EPRT`) and FTP over TLS are deliberately unavailable.
+
+`APPE` appends to the current virtual file while retaining each captured artifact in quarantine. `TYPE A` converts between local line endings and FTP NVT ASCII, and `ABOR` can interrupt a pending or active passive transfer without closing the control session.
 
 ## Telemetry
 
@@ -193,10 +195,11 @@ The integration test starts the Java server on ephemeral ports and verifies:
 - Valid and invalid credentials.
 - Account-specific directory visibility.
 - Anonymous read-only access.
-- `EPSV`, `LIST`, `RETR`, and `STOR` transfers.
-- Upload quarantine and SHA-256 telemetry.
+- `EPSV`, `LIST`, `RETR`, `STOR`, and append-correct `APPE` transfers.
+- `TYPE A` line-ending conversion and an in-progress `ABOR`.
+- Upload quarantine and exact SHA-256 telemetry values.
 - JSONL credential and upload events.
-- Virtual path normalization.
+- Virtual path normalization and symbolic-link rejection.
 
 ## Legal and operational safety
 

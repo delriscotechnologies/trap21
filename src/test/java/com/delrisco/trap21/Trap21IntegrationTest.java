@@ -8,22 +8,34 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.nio.file.FileSystemException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Comparator;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 public final class Trap21IntegrationTest {
     private static final Pattern EPSV_PORT = Pattern.compile("\\(\\|\\|\\|(\\d+)\\|\\)");
+    private static final String INITIAL_UPLOAD = "trap21 upload probe\n";
+    private static final String APPENDED_UPLOAD = "appended content\n";
+    private static final String COMPLETE_UPLOAD = INITIAL_UPLOAD + APPENDED_UPLOAD;
+    private static final String ASCII_LOCAL = "line one\nline two\n";
+    private static final String ASCII_NETWORK = "line one\r\nline two\r\n";
 
     private Trap21IntegrationTest() {
     }
 
     public static void main(String[] args) throws Exception {
         Path temporary = Files.createTempDirectory("trap21-integration-");
+        Path outside = Files.createTempDirectory("trap21-outside-");
+        Files.writeString(outside.resolve("secret.txt"), "outside virtual root", StandardCharsets.UTF_8);
         Trap21Config config = new Trap21Config(
                 InetAddress.getByName("127.0.0.1"),
                 0,
@@ -41,6 +53,7 @@ public final class Trap21IntegrationTest {
             testDefaultCredentialsAndTransfers(server.port());
             testInvalidCredentials(server.port());
             testAnonymousIsolation(server.port());
+            testSymbolicLinkIsolation(server.port(), temporary, outside);
         }
 
         assertTrue(Files.exists(temporary.resolve("events.jsonl")), "events.jsonl was not created");
@@ -49,18 +62,26 @@ public final class Trap21IntegrationTest {
         assertContains(events, "\"presentedPassword\":\"87654321\"");
         assertContains(events, "\"eventType\":\"UPLOAD\"");
         assertContains(events, "\"status\":\"CAPTURED\"");
+        assertContains(events, "\"sha256\":\"" + sha256(INITIAL_UPLOAD) + "\"");
+        assertContains(events, "\"sha256\":\"" + sha256(COMPLETE_UPLOAD) + "\"");
+        assertContains(events, "\"sha256\":\"" + sha256(ASCII_LOCAL) + "\"");
 
-        Path captured;
+        List<String> capturedContents;
         try (Stream<Path> paths = Files.walk(temporary.resolve("quarantine"))) {
-            captured = paths.filter(Files::isRegularFile).findFirst().orElseThrow(
-                    () -> new AssertionError("Uploaded file was not captured in quarantine"));
+            capturedContents = paths
+                    .filter(Files::isRegularFile)
+                    .map(Trap21IntegrationTest::readStringUnchecked)
+                    .toList();
         }
-        assertEquals("trap21 upload probe\n", Files.readString(captured, StandardCharsets.UTF_8));
+        assertTrue(capturedContents.contains(INITIAL_UPLOAD), "Initial upload was not captured in quarantine");
+        assertTrue(capturedContents.contains(COMPLETE_UPLOAD), "Appended upload was not captured in quarantine");
+        assertTrue(capturedContents.contains(ASCII_LOCAL), "ASCII upload was not normalized in quarantine");
 
         assertEquals("/Windows/System32", VirtualFileSystem.normalizeVirtualPath("../../../../Windows/System32"));
         assertTrue(!Files.exists(temporary.resolve("Windows")), "Traversal created a path outside the virtual root");
 
         deleteRecursively(temporary);
+        deleteRecursively(outside);
         System.out.println("TRAP21 integration tests passed");
     }
 
@@ -84,10 +105,22 @@ public final class Trap21IntegrationTest {
             String readme = client.downloadData("RETR /pub/README.txt");
             assertContains(readme, "Managed File Transfer Gateway");
 
-            client.uploadData("STOR /incoming/probe.txt", "trap21 upload probe\n");
+            client.uploadData("STOR /incoming/probe.txt", INITIAL_UPLOAD);
+            client.uploadData("APPE /incoming/probe.txt", APPENDED_UPLOAD);
             String incoming = client.downloadData("LIST /incoming");
             assertContains(incoming, "probe.txt");
-            assertContains(client.downloadData("RETR /incoming/probe.txt"), "trap21 upload probe");
+            assertEquals(COMPLETE_UPLOAD, client.downloadData("RETR /incoming/probe.txt"));
+
+            client.expect("TYPE A", 200);
+            client.uploadData("STOR /incoming/ascii.txt", ASCII_NETWORK);
+            client.expect("TYPE I", 200);
+            assertEquals(ASCII_LOCAL, client.downloadData("RETR /incoming/ascii.txt"));
+            client.expect("TYPE A", 200);
+            assertEquals(ASCII_NETWORK, client.downloadData("RETR /incoming/ascii.txt"));
+            client.expect("TYPE I", 200);
+
+            client.abortUpload("STOR /incoming/aborted.txt", "partial upload");
+            assertNotContains(client.downloadData("NLST /incoming"), "aborted.txt");
             client.expect("QUIT", 221);
         }
     }
@@ -116,11 +149,52 @@ public final class Trap21IntegrationTest {
         }
     }
 
+    private static void testSymbolicLinkIsolation(int port, Path dataDirectory, Path outside) throws Exception {
+        Path link = dataDirectory.resolve("vfs/incoming/escape");
+        try {
+            Files.createSymbolicLink(link, outside);
+        } catch (UnsupportedOperationException | FileSystemException exception) {
+            System.out.println("Symbolic-link isolation test skipped: " + exception.getMessage());
+            return;
+        }
+
+        try (FtpClient client = new FtpClient(port)) {
+            client.expectReply(220);
+            client.expect("USER ftpuser", 331);
+            client.expect("PASS 87654321", 230);
+            client.expect("CWD /incoming/escape", 550);
+            client.expect("RETR /incoming/escape/secret.txt", 550);
+            client.expect("STOR /incoming/escape/created.txt", 550);
+            client.expect("MKD /incoming/escape/created", 550);
+            client.expect("QUIT", 221);
+        }
+
+        assertTrue(!Files.exists(outside.resolve("created.txt")), "Upload escaped through a symbolic link");
+        assertTrue(!Files.exists(outside.resolve("created")), "Directory creation escaped through a symbolic link");
+    }
+
     private static void deleteRecursively(Path target) throws IOException {
         try (Stream<Path> paths = Files.walk(target)) {
             for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
                 Files.deleteIfExists(path);
             }
+        }
+    }
+
+    private static String readStringUnchecked(Path path) {
+        try {
+            return Files.readString(path, StandardCharsets.UTF_8);
+        } catch (IOException exception) {
+            throw new IllegalStateException("Could not read captured upload " + path, exception);
+        }
+    }
+
+    private static String sha256(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable", exception);
         }
     }
 
@@ -203,6 +277,20 @@ public final class Trap21IntegrationTest {
                 expectReply(150);
                 data.getOutputStream().write(content.getBytes(StandardCharsets.UTF_8));
                 data.shutdownOutput();
+                expectReply(226);
+            }
+        }
+
+        void abortUpload(String command, String partialContent) throws IOException {
+            int dataPort = enterExtendedPassiveMode();
+            try (Socket data = new Socket("127.0.0.1", dataPort)) {
+                data.setSoTimeout(5_000);
+                send(command);
+                expectReply(150);
+                data.getOutputStream().write(partialContent.getBytes(StandardCharsets.UTF_8));
+                data.getOutputStream().flush();
+                send("ABOR");
+                expectReply(426);
                 expectReply(226);
             }
         }

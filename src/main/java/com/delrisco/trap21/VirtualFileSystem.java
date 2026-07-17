@@ -6,14 +6,15 @@ import java.io.OutputStream;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.HexFormat;
@@ -51,11 +52,18 @@ final class VirtualFileSystem {
 
     VirtualFileSystem(Path dataDirectory) throws IOException {
         Path normalizedData = dataDirectory.toAbsolutePath().normalize();
-        this.root = normalizedData.resolve("vfs").normalize();
-        this.quarantine = normalizedData.resolve("quarantine").normalize();
+        Files.createDirectories(normalizedData);
+        Path realData = normalizedData.toRealPath();
+        this.root = realData.resolve("vfs").normalize();
+        this.quarantine = realData.resolve("quarantine").normalize();
         Files.createDirectories(root);
         Files.createDirectories(quarantine);
+        requireRealDirectory(root);
+        requireRealDirectory(quarantine);
+        rejectSymbolicLinksInTree(root);
+        rejectSymbolicLinksInTree(quarantine);
         SeedData.populate(root);
+        rejectSymbolicLinksInTree(root);
     }
 
     Path root() {
@@ -72,20 +80,25 @@ final class VirtualFileSystem {
         return normalizeVirtualPath(raw);
     }
 
-    boolean exists(String virtualPath) {
-        return uploads.containsKey(virtualPath) || Files.exists(toHostPathUnchecked(virtualPath));
+    boolean exists(String virtualPath) throws IOException {
+        return uploads.containsKey(virtualPath)
+                || Files.exists(toHostPath(virtualPath), LinkOption.NOFOLLOW_LINKS);
     }
 
-    boolean isDirectory(String virtualPath) {
-        return Files.isDirectory(toHostPathUnchecked(virtualPath));
+    boolean isDirectory(String virtualPath) throws IOException {
+        return Files.isDirectory(toHostPath(virtualPath), LinkOption.NOFOLLOW_LINKS);
+    }
+
+    void validatePath(String virtualPath) throws IOException {
+        toHostPath(virtualPath);
     }
 
     List<FileEntry> list(String virtualPath, boolean includeHidden) throws IOException {
         Path hostPath = toHostPath(virtualPath);
-        if (!Files.exists(hostPath)) {
+        if (!Files.exists(hostPath, LinkOption.NOFOLLOW_LINKS)) {
             throw new NoSuchFileException(virtualPath);
         }
-        if (!Files.isDirectory(hostPath)) {
+        if (!Files.isDirectory(hostPath, LinkOption.NOFOLLOW_LINKS)) {
             return List.of(entry(virtualPath, hostPath));
         }
 
@@ -98,9 +111,9 @@ final class VirtualFileSystem {
                 }
                 String childVirtual = childVirtualPath(virtualPath, name);
                 try {
-                    entries.put(name, entry(childVirtual, child));
+                    entries.put(name, entry(childVirtual, toHostPath(childVirtual)));
                 } catch (IOException exception) {
-                    // A concurrently removed decoy is simply omitted from this listing.
+                    // Removed entries and symbolic links are omitted from the decoy listing.
                 }
             });
         }
@@ -119,11 +132,14 @@ final class VirtualFileSystem {
 
     InputStream openForRead(String virtualPath) throws IOException {
         CapturedUpload captured = uploads.get(virtualPath);
-        Path source = captured == null ? toHostPath(virtualPath) : captured.quarantineFile();
-        if (!Files.exists(source) || Files.isDirectory(source)) {
+        Path source = captured == null
+                ? toHostPath(virtualPath)
+                : checkedQuarantinePath(captured.quarantineFile());
+        if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)
+                || Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS)) {
             throw new NoSuchFileException(virtualPath);
         }
-        return Files.newInputStream(source);
+        return Files.newInputStream(source, LinkOption.NOFOLLOW_LINKS);
     }
 
     long size(String virtualPath) throws IOException {
@@ -132,7 +148,8 @@ final class VirtualFileSystem {
             return captured.size();
         }
         Path path = toHostPath(virtualPath);
-        if (!Files.exists(path) || Files.isDirectory(path)) {
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)
+                || Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) {
             throw new NoSuchFileException(virtualPath);
         }
         return Files.size(path);
@@ -142,24 +159,34 @@ final class VirtualFileSystem {
         CapturedUpload captured = uploads.get(virtualPath);
         return captured != null
                 ? captured.capturedAt()
-                : Files.getLastModifiedTime(toHostPath(virtualPath)).toInstant();
+                : Files.getLastModifiedTime(toHostPath(virtualPath), LinkOption.NOFOLLOW_LINKS).toInstant();
     }
 
     CapturedUpload capture(
             String sessionId,
             String virtualPath,
             InputStream input,
-            long maximumBytes) throws IOException {
+            long maximumBytes,
+            boolean append) throws IOException {
         Path visiblePath = toHostPath(virtualPath);
         Path parent = visiblePath.getParent();
-        if (parent == null || !Files.isDirectory(parent)) {
+        if (parent == null || !Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS)) {
             throw new NoSuchFileException(parent(virtualPath));
         }
-        if (Files.isDirectory(visiblePath)) {
+        if (Files.isDirectory(visiblePath, LinkOption.NOFOLLOW_LINKS)) {
             throw new FileAlreadyExistsException(virtualPath);
         }
-        if (Files.exists(visiblePath) && !uploads.containsKey(virtualPath)) {
+        CapturedUpload previous = uploads.get(virtualPath);
+        boolean visibleExists = Files.exists(visiblePath, LinkOption.NOFOLLOW_LINKS);
+        if (visibleExists && !append && previous == null) {
             throw new FileAlreadyExistsException("Refusing to replace a seeded decoy: " + virtualPath);
+        }
+
+        Path appendSource = null;
+        if (append && previous != null) {
+            appendSource = checkedQuarantinePath(previous.quarantineFile());
+        } else if (append && visibleExists) {
+            appendSource = visiblePath;
         }
 
         String originalName = fileName(virtualPath);
@@ -167,28 +194,29 @@ final class VirtualFileSystem {
         Path sessionDirectory = quarantine.resolve(safeSegment(sessionId)).normalize();
         assertInside(quarantine, sessionDirectory);
         Files.createDirectories(sessionDirectory);
+        assertNoSymbolicLinkComponents(quarantine, sessionDirectory);
         Path capturedPath = sessionDirectory.resolve(UUID.randomUUID() + "_" + safeSegment(originalName)).normalize();
         assertInside(sessionDirectory, capturedPath);
 
         MessageDigest digest = sha256();
         long total = 0;
-        byte[] buffer = new byte[16 * 1024];
-        try (OutputStream output = Files.newOutputStream(capturedPath)) {
-            int count;
-            while ((count = input.read(buffer)) != -1) {
-                total += count;
-                if (total > maximumBytes) {
-                    throw new UploadTooLargeException(maximumBytes);
+        try (OutputStream output = Files.newOutputStream(
+                capturedPath,
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE,
+                LinkOption.NOFOLLOW_LINKS)) {
+            if (appendSource != null) {
+                try (InputStream existing = Files.newInputStream(appendSource, LinkOption.NOFOLLOW_LINKS)) {
+                    total = copyLimited(existing, output, digest, total, maximumBytes);
                 }
-                digest.update(buffer, 0, count);
-                output.write(buffer, 0, count);
             }
+            total = copyLimited(input, output, digest, total, maximumBytes);
         } catch (IOException exception) {
             Files.deleteIfExists(capturedPath);
             throw exception;
         }
 
-        if (!Files.exists(visiblePath)) {
+        if (!visibleExists) {
             Files.createFile(visiblePath);
         }
         CapturedUpload upload = new CapturedUpload(
@@ -216,7 +244,8 @@ final class VirtualFileSystem {
     void delete(String virtualPath) throws IOException {
         uploads.remove(virtualPath);
         Path visible = toHostPath(virtualPath);
-        if (!Files.exists(visible) || Files.isDirectory(visible)) {
+        if (!Files.exists(visible, LinkOption.NOFOLLOW_LINKS)
+                || Files.isDirectory(visible, LinkOption.NOFOLLOW_LINKS)) {
             throw new NoSuchFileException(virtualPath);
         }
         Files.delete(visible);
@@ -225,10 +254,10 @@ final class VirtualFileSystem {
     void rename(String sourceVirtual, String targetVirtual) throws IOException {
         Path source = toHostPath(sourceVirtual);
         Path target = toHostPath(targetVirtual);
-        if (!Files.exists(source)) {
+        if (!Files.exists(source, LinkOption.NOFOLLOW_LINKS)) {
             throw new NoSuchFileException(sourceVirtual);
         }
-        if (!Files.isDirectory(target.getParent())) {
+        if (!Files.isDirectory(target.getParent(), LinkOption.NOFOLLOW_LINKS)) {
             throw new NoSuchFileException(parent(targetVirtual));
         }
         validateFileName(fileName(targetVirtual));
@@ -268,11 +297,14 @@ final class VirtualFileSystem {
     }
 
     private FileEntry entry(String virtualPath, Path hostPath) throws IOException {
+        if (Files.isSymbolicLink(hostPath)) {
+            throw new IOException("Symbolic links are not allowed in the virtual filesystem");
+        }
         CapturedUpload captured = uploads.get(virtualPath);
-        boolean directory = Files.isDirectory(hostPath);
+        boolean directory = Files.isDirectory(hostPath, LinkOption.NOFOLLOW_LINKS);
         long size = directory ? 0L : captured == null ? Files.size(hostPath) : captured.size();
         Instant modified = captured == null
-                ? Files.getLastModifiedTime(hostPath).toInstant()
+                ? Files.getLastModifiedTime(hostPath, LinkOption.NOFOLLOW_LINKS).toInstant()
                 : captured.capturedAt();
         return new FileEntry(fileName(virtualPath), virtualPath, directory, size, modified);
     }
@@ -283,21 +315,70 @@ final class VirtualFileSystem {
                 ? root
                 : root.resolve(normalized.substring(1)).normalize();
         assertInside(root, candidate);
+        assertNoSymbolicLinkComponents(root, candidate);
         return candidate;
-    }
-
-    private Path toHostPathUnchecked(String virtualPath) {
-        try {
-            return toHostPath(virtualPath);
-        } catch (IOException exception) {
-            return root.resolve("__invalid_path__");
-        }
     }
 
     private static void assertInside(Path expectedRoot, Path candidate) throws IOException {
         if (!candidate.startsWith(expectedRoot)) {
             throw new IOException("Path escapes the virtual filesystem");
         }
+    }
+
+    private Path checkedQuarantinePath(Path candidate) throws IOException {
+        Path normalized = candidate.toAbsolutePath().normalize();
+        assertInside(quarantine, normalized);
+        assertNoSymbolicLinkComponents(quarantine, normalized);
+        return normalized;
+    }
+
+    private static void requireRealDirectory(Path directory) throws IOException {
+        if (Files.isSymbolicLink(directory)
+                || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("TRAP21 data directories must be real directories, not symbolic links: " + directory);
+        }
+    }
+
+    private static void rejectSymbolicLinksInTree(Path directory) throws IOException {
+        try (Stream<Path> paths = Files.walk(directory)) {
+            Path symbolicLink = paths.filter(Files::isSymbolicLink).findFirst().orElse(null);
+            if (symbolicLink != null) {
+                throw new IOException("Symbolic links are not allowed in TRAP21 data: " + symbolicLink);
+            }
+        }
+    }
+
+    private static void assertNoSymbolicLinkComponents(Path expectedRoot, Path candidate) throws IOException {
+        Path current = expectedRoot;
+        if (Files.isSymbolicLink(current)) {
+            throw new IOException("Symbolic links are not allowed in TRAP21 data: " + current);
+        }
+        for (Path segment : expectedRoot.relativize(candidate)) {
+            current = current.resolve(segment);
+            if (Files.isSymbolicLink(current)) {
+                throw new IOException("Symbolic links are not allowed in TRAP21 data: " + current);
+            }
+        }
+    }
+
+    private static long copyLimited(
+            InputStream input,
+            OutputStream output,
+            MessageDigest digest,
+            long initialBytes,
+            long maximumBytes) throws IOException {
+        long total = initialBytes;
+        byte[] buffer = new byte[16 * 1024];
+        int count;
+        while ((count = input.read(buffer)) != -1) {
+            total += count;
+            if (total > maximumBytes) {
+                throw new UploadTooLargeException(maximumBytes);
+            }
+            digest.update(buffer, 0, count);
+            output.write(buffer, 0, count);
+        }
+        return total;
     }
 
     private static String childVirtualPath(String directory, String name) {
