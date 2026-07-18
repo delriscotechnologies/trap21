@@ -118,9 +118,9 @@ Events are appended to `data/events.jsonl` as the session unfolds:
 
 </details>
 
-Attempted passwords are intentionally stored in plaintext as honeypot telemetry. Protect the data directory, limit operator access, and treat accidental use of real credentials as sensitive data.
+Individually retained authentication attempts store presented passwords in plaintext as honeypot telemetry. Protect the data directory, limit operator access, and treat accidental use of real credentials as sensitive data.
 
-High-rate command activity does not change the FTP responses seen by the visitor. The logger records up to 100 `COMMAND` events per second for each session and emits a `COMMANDS_SUPPRESSED` summary for additional commands, while authentication, upload, failure, and lifecycle events continue to be recorded.
+High-rate activity does not change the FTP responses seen by the visitor. For each session, the logger retains up to 100 `COMMAND` events and 25 failed `AUTH_ATTEMPT` events per second. Additional events are represented by `COMMANDS_SUPPRESSED` or `AUTH_ATTEMPTS_SUPPRESSED` summaries. Authentication successes, uploads, transfer results, failures, and lifecycle events are always retained; authentication summaries expose counts of distinct usernames and passwords rather than the additional plaintext values.
 
 ### Quarantined uploads
 
@@ -138,7 +138,7 @@ TRAP21 is intentionally vulnerable at the decoy interface and intentionally boun
 | --- | --- |
 | Filesystem | Paths stay inside a dedicated virtual root; symbolic links are rejected |
 | Passive data | Connections must originate from the control-session source address; waits expire through `TRAP21_DATA_TIMEOUT` |
-| Resources | Commands, deadlines, timeouts, upload storage, command telemetry, logs, and sessions are bounded |
+| Resources | Commands, deadlines, timeouts, upload storage, telemetry, logs, and sessions are bounded |
 | Container | The supplied image runs without root privileges or Linux capabilities and uses owner-only evidence permissions |
 | Execution | No shell, command execution, proxying, archive extraction, or malware execution |
 
