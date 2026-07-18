@@ -101,7 +101,7 @@ Events are appended to `data/events.jsonl` as the session unfolds:
 | Signal | Captured detail |
 | --- | --- |
 | Connection | Source address and session lifecycle |
-| Authentication | Presented username and password, acceptance, telemetry rank, and profile |
+| Authentication | Presented username and password, acceptance, and profile |
 | FTP activity | Commands, paths, downloads, and transfer status |
 | Upload | Path, byte count, SHA-256 hash, and quarantine location |
 
@@ -109,7 +109,7 @@ Events are appended to `data/events.jsonl` as the session unfolds:
 <summary><strong>View example JSONL events</strong></summary>
 
 ```json
-{"timestamp":"2026-07-17T16:42:18Z","eventType":"AUTH_ATTEMPT","sessionId":"...","sourceIp":"192.0.2.45","username":"ftpuser","presentedPassword":"87654321","accepted":true,"passwordRank":30,"profile":"TRANSFER"}
+{"timestamp":"2026-07-17T16:42:18Z","eventType":"AUTH_ATTEMPT","sessionId":"...","sourceIp":"192.0.2.45","username":"ftpuser","presentedPassword":"87654321","accepted":true,"profile":"TRANSFER"}
 ```
 
 ```json
@@ -120,22 +120,26 @@ Events are appended to `data/events.jsonl` as the session unfolds:
 
 Attempted passwords are intentionally stored in plaintext as honeypot telemetry. Protect the data directory, limit operator access, and treat accidental use of real credentials as sensitive data.
 
+High-rate command activity does not change the FTP responses seen by the visitor. The logger records up to 100 `COMMAND` events per second for each session and emits a `COMMANDS_SUPPRESSED` summary for additional commands, while authentication, upload, failure, and lifecycle events continue to be recorded.
+
 ### Quarantined uploads
 
 Uploaded bytes are stored beneath `data/quarantine/<session-id>/`. The virtual tree receives a placeholder and metadata mapping, allowing the client to list and retrieve the captured upload while TRAP21 is running.
 
 TRAP21 never executes, parses, unpacks, or forwards uploaded content. Deleting a file through FTP removes its virtual presence but preserves the quarantine artifact. File count, total bytes, and event-log growth are bounded by configurable limits. Age-based pruning runs at startup and is checked before new captures; artifacts still mapped into the live virtual tree are retained for the life of that server process.
 
+The supplied container starts with a restrictive `077` umask and normalizes existing evidence to owner-only permissions: directories use `0700` and files use `0600`.
+
 ## Scope and Safeguards
 
-TRAP21 is intentionally bounded:
+TRAP21 is intentionally vulnerable at the decoy interface and intentionally bounded at the host boundary:
 
 | Boundary | Enforcement |
 | --- | --- |
 | Filesystem | Paths stay inside a dedicated virtual root; symbolic links are rejected |
-| Passive data | Connections must originate from the control-session source address |
-| Resources | Commands, deadlines, timeouts, upload storage, logs, and sessions are limited |
-| Container | The supplied image runs without root privileges or Linux capabilities |
+| Passive data | Connections must originate from the control-session source address; waits expire through `TRAP21_DATA_TIMEOUT` |
+| Resources | Commands, deadlines, timeouts, upload storage, command telemetry, logs, and sessions are bounded |
+| Container | The supplied image runs without root privileges or Linux capabilities and uses owner-only evidence permissions |
 | Execution | No shell, command execution, proxying, archive extraction, or malware execution |
 
 Before deployment:
