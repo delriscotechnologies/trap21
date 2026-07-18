@@ -74,7 +74,7 @@ SIZE MDTM MKD XMKD RMD XRMD DELE
 RNFR RNTO STAT ABOR
 ```
 
-`APPE` appends to the current virtual file while preserving each captured artifact in quarantine. `TYPE A` converts between local line endings and FTP NVT ASCII. `ABOR` interrupts a pending or active passive transfer without closing the control session.
+`APPE` appends to the current virtual file while preserving each captured artifact in quarantine. `TYPE A` converts between local line endings and FTP NVT ASCII. `ABOR` interrupts an active transfer after its passive data connection has been established. A transfer still waiting for that connection ends when `TRAP21_DATA_TIMEOUT` expires.
 
 </details>
 
@@ -101,7 +101,7 @@ Events are appended to `data/events.jsonl` as the session unfolds:
 | Signal | Captured detail |
 | --- | --- |
 | Connection | Source address and session lifecycle |
-| Authentication | Presented username and password, acceptance, rank, and profile |
+| Authentication | Presented username and password, acceptance, telemetry rank, and profile |
 | FTP activity | Commands, paths, downloads, and transfer status |
 | Upload | Path, byte count, SHA-256 hash, and quarantine location |
 
@@ -124,7 +124,7 @@ Attempted passwords are intentionally stored in plaintext as honeypot telemetry.
 
 Uploaded bytes are stored beneath `data/quarantine/<session-id>/`. The virtual tree receives a placeholder and metadata mapping, allowing the client to list and retrieve the captured upload while TRAP21 is running.
 
-TRAP21 never executes, parses, unpacks, or forwards uploaded content. Deleting a file through FTP removes its virtual presence but preserves the quarantine artifact. File count, total bytes, artifact age, and event-log growth are bounded by configurable retention limits.
+TRAP21 never executes, parses, unpacks, or forwards uploaded content. Deleting a file through FTP removes its virtual presence but preserves the quarantine artifact. File count, total bytes, and event-log growth are bounded by configurable limits. Age-based pruning runs at startup and is checked before new captures; artifacts still mapped into the live virtual tree are retained for the life of that server process.
 
 ## Scope and Safeguards
 
@@ -134,7 +134,7 @@ TRAP21 is intentionally bounded:
 | --- | --- |
 | Filesystem | Paths stay inside a dedicated virtual root; symbolic links are rejected |
 | Passive data | Connections must originate from the control-session source address |
-| Resources | Commands, deadlines, timeouts, uploads, retention, logs, and sessions are limited |
+| Resources | Commands, deadlines, timeouts, upload storage, logs, and sessions are limited |
 | Container | The supplied image runs without root privileges or Linux capabilities |
 | Execution | No shell, command execution, proxying, archive extraction, or malware execution |
 
