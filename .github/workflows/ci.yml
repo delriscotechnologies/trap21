@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Compile and run integration tests
         run: docker build --target test -t trap21:test .
@@ -37,7 +37,7 @@ jobs:
             fi
             sleep 1
           done
-          docker compose exec -T trap21 sh -c 'test "$(id -u)" -ne 0 && test -w /app/data'
+          docker compose exec -T trap21 sh -c 'test "$(id -u)" -ne 0 && test -w /app/data && test "$(stat -c %a /app/data)" = 700'
 
       - name: Tear down Compose smoke test
         if: always()
