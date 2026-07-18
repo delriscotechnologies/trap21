@@ -113,27 +113,6 @@ Active data mode (`PORT` and `EPRT`) and FTP over TLS are deliberately unavailab
 
 `APPE` appends to the current virtual file while retaining each captured artifact in quarantine. `TYPE A` converts between local line endings and FTP NVT ASCII, and `ABOR` can interrupt a pending or active passive transfer without closing the control session.
 
-## Scope and Safeguards
-
-TRAP21 is intentionally bounded:
-
-- Virtual paths are normalized inside a dedicated data root, with symbolic links rejected.
-- Passive data connections must originate from the control-session source address.
-- Command length, command deadlines, idle timeouts, data timeouts, uploads, and concurrent sessions are limited.
-- Quarantine growth, retention, and JSONL rotation are bounded.
-- The supplied container runs without root privileges or Linux capabilities.
-- There is no shell, command execution, proxying, archive extraction, or malware execution.
-
-Before deployment:
-
-1. Obtain written authorization for the network and address space.
-2. Isolate the honeypot from production assets.
-3. Deny unnecessary outbound traffic.
-4. Do not reuse captured credentials against third-party systems.
-5. Establish retention and incident-handling procedures for logs and uploads.
-
-See [SECURITY.md](SECURITY.md) for the threat boundary and reporting process.
-
 ## Development
 
 ### VS Code
@@ -156,6 +135,27 @@ java -jar ./build/trap21.jar
 ```
 
 The direct Java process listens on port `2121` by default, avoiding the privileged/public FTP port during development.
+
+## Scope and Safeguards
+
+TRAP21 is intentionally bounded:
+
+- Virtual paths are normalized inside a dedicated data root, with symbolic links rejected.
+- Passive data connections must originate from the control-session source address.
+- Command length, command deadlines, idle timeouts, data timeouts, uploads, and concurrent sessions are limited.
+- Quarantine growth, retention, and JSONL rotation are bounded.
+- The supplied container runs without root privileges or Linux capabilities.
+- There is no shell, command execution, proxying, archive extraction, or malware execution.
+
+Before deployment:
+
+1. Obtain written authorization for the network and address space.
+2. Isolate the honeypot from production assets.
+3. Deny unnecessary outbound traffic.
+4. Do not reuse captured credentials against third-party systems.
+5. Establish retention and incident-handling procedures for logs and uploads.
+
+See [SECURITY.md](SECURITY.md) for the threat boundary and reporting process.
 
 ## License
 
