@@ -6,6 +6,7 @@ TRAP21 uses the following environment variables:
 
 | Environment variable | Default | Purpose |
 |---|---|---|
+| `TRAP21_LISTEN_HOST` | `127.0.0.1` | Host interface published by Docker Compose |
 | `TRAP21_BIND` | `0.0.0.0` | Control and passive bind address |
 | `TRAP21_PORT` | `2121` | Internal control port |
 | `TRAP21_PASSIVE_START` | `30000` | First passive port |
@@ -23,6 +24,21 @@ TRAP21 uses the following environment variables:
 | `TRAP21_MAX_EVENT_ARCHIVES` | `5` | Rotated JSONL archives to retain |
 | `TRAP21_MAX_SESSIONS` | `64` | Concurrent session limit |
 | `TRAP21_MAX_SESSIONS_PER_IP` | `8` | Concurrent sessions allowed per source address |
+
+## Remote deployment
+
+The Compose configuration publishes only on `127.0.0.1` by default. For an authorized remote deployment, set both values explicitly in `.env`:
+
+```dotenv
+TRAP21_LISTEN_HOST=0.0.0.0
+TRAP21_PUBLIC_HOST=<public IPv4>
+```
+
+`TRAP21_LISTEN_HOST` controls the host interfaces Docker publishes. `TRAP21_PUBLIC_HOST` is the address returned by `PASV`. Passive FTP will fail if the public host points to an internal container address.
+
+## Data persistence
+
+Compose stores telemetry and quarantine data in the named volume `trap21-data`, preserving the image's non-root ownership. Use `docker compose down -v` only when you intentionally want to delete that evidence volume.
 
 ## Default credentials
 
