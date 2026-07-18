@@ -1,7 +1,4 @@
-ARG TEMURIN_JDK_IMAGE=eclipse-temurin:21-jdk-alpine@sha256:1ff763083f2993d57d0bf374ab10bb3e2cb873af6c13a04458ebbd3e0337dc76
-ARG TEMURIN_JRE_IMAGE=eclipse-temurin:21-jre-alpine@sha256:3f08b13888f595cc49edabea7250ba69499ba25602b267da591720769400e08c
-
-FROM ${TEMURIN_JDK_IMAGE} AS build
+FROM eclipse-temurin:21-jdk-alpine@sha256:1ff763083f2993d57d0bf374ab10bb3e2cb873af6c13a04458ebbd3e0337dc76 AS build
 
 WORKDIR /workspace
 COPY src/main/java ./src/main/java
@@ -20,7 +17,7 @@ RUN find src/test/java -name '*.java' -print | sort > test-sources.txt \
     && java -ea -cp build/main:build/test com.delrisco.trap21.Trap21IntegrationTest \
     && java -ea -cp build/main:build/test com.delrisco.trap21.JsonlEventLoggerRateLimitTest
 
-FROM ${TEMURIN_JRE_IMAGE} AS runtime
+FROM eclipse-temurin:21-jre-alpine@sha256:3f08b13888f595cc49edabea7250ba69499ba25602b267da591720769400e08c AS runtime
 
 RUN addgroup -S trap21 && adduser -S -G trap21 trap21 \
     && mkdir -p /app/data \
