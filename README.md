@@ -170,27 +170,6 @@ TRAP21 never executes, parses, unpacks, or forwards uploaded content. Deleting a
 | `TRAP21_MAX_SESSIONS` | `64` | Concurrent session limit |
 | `TRAP21_MAX_SESSIONS_PER_IP` | `8` | Concurrent sessions allowed per source address |
 
-## Validation
-
-```powershell
-docker build --target test -t trap21:test .
-docker build --target runtime -t trap21:latest .
-```
-
-The integration test starts the Java server on ephemeral ports and verifies:
-
-- The exact FTP banner.
-- Valid and invalid credentials.
-- Account-specific directory visibility.
-- Anonymous read-only access.
-- `EPSV`, `LIST`, `RETR`, `STOR`, and append-correct `APPE` transfers.
-- `TYPE A` line-ending conversion and an in-progress `ABOR`.
-- Upload quarantine and exact SHA-256 telemetry values.
-- Quarantine quotas, retention, and JSONL rotation.
-- Absolute command deadlines and per-source session limits.
-- JSONL credential and upload events.
-- Virtual path normalization, symbolic-link rejection, and captured-file directory renames.
-
 ## Legal and operational safety
 
 TRAP21 is a defensive monitoring tool. Before deployment:
