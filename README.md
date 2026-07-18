@@ -41,23 +41,7 @@ TRAP21 does not expose its product name, honeypot purpose, Java implementation, 
 - Non-root, capability-free Docker runtime.
 - No shell, command execution, proxying, archive extraction, or malware execution.
 
-## Default credentials
-
-The passwords are intentionally weak. They are pinned to positions 10, 15, 20, and every fifth position after that in the [NordPass 2025 global password ranking](https://nordpass.com/most-common-passwords-list/).
-
-| Username | Password | Rank | Profile |
-|---|---|---:|---|
-| `admin` | `admin123` | 10 | Administrator |
-| `administrator` | `P@ssw0rd` | 15 | Administrator |
-| `ftp` | `112233` | 20 | Transfer |
-| `ftpadmin` | `qwerty123` | 25 | Administrator |
-| `ftpuser` | `87654321` | 30 | Transfer |
-| `backup` | `Aa112233` | 35 | Backup |
-| `operator` | `Password@123` | 40 | Operations |
-| `service` | `Admin123` | 45 | Transfer service |
-| `guest` | `121212` | 50 | Guest |
-
-The `anonymous` account accepts a password containing an email-style `@` separator and receives read-only access to `/pub`.
+See [Configuration](docs/CONFIGURATION.md) for environment variables and built-in accounts.
 
 ## Quick start
 
@@ -147,28 +131,6 @@ Attempted passwords are intentionally captured in plaintext because they are hon
 Uploaded bytes are written beneath `data/quarantine/<session-id>/`. The virtual tree receives only a placeholder and metadata mapping, allowing the FTP client to list and retrieve the captured upload during the running process.
 
 TRAP21 never executes, parses, unpacks, or forwards uploaded content. Deleting a file through FTP removes its virtual presence but preserves the captured quarantine artifact. Quarantine growth is bounded by total bytes and file count; expired historical artifacts are pruned according to the retention period.
-
-## Configuration
-
-| Environment variable | Default | Purpose |
-|---|---|---|
-| `TRAP21_BIND` | `0.0.0.0` | Control and passive bind address |
-| `TRAP21_PORT` | `2121` | Internal control port |
-| `TRAP21_PASSIVE_START` | `30000` | First passive port |
-| `TRAP21_PASSIVE_END` | `30009` | Last passive port |
-| `TRAP21_PUBLIC_HOST` | control address | IPv4 advertised by `PASV` |
-| `TRAP21_DATA_DIR` | `data` | VFS, telemetry, and quarantine root |
-| `TRAP21_IDLE_TIMEOUT` | `120` | Control idle timeout in seconds |
-| `TRAP21_COMMAND_TIMEOUT` | `15` | Absolute time to finish a command after its first byte |
-| `TRAP21_DATA_TIMEOUT` | `15` | Data connection timeout in seconds |
-| `TRAP21_MAX_UPLOAD_BYTES` | `10485760` | Maximum upload size |
-| `TRAP21_MAX_QUARANTINE_BYTES` | `268435456` | Total retained quarantine-byte limit |
-| `TRAP21_MAX_QUARANTINE_FILES` | `4096` | Total retained quarantine-file limit |
-| `TRAP21_RETENTION_DAYS` | `30` | Age limit for historical quarantine artifacts |
-| `TRAP21_MAX_EVENT_LOG_BYTES` | `33554432` | Rotate the active JSONL log at this size |
-| `TRAP21_MAX_EVENT_ARCHIVES` | `5` | Rotated JSONL archives to retain |
-| `TRAP21_MAX_SESSIONS` | `64` | Concurrent session limit |
-| `TRAP21_MAX_SESSIONS_PER_IP` | `8` | Concurrent sessions allowed per source address |
 
 ## Legal and operational safety
 
