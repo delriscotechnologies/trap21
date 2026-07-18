@@ -51,6 +51,34 @@ curl.exe --user "ftpuser:87654321" "ftp://127.0.0.1/"
 
 See [Configuration](docs/CONFIGURATION.md) for remote deployment, data persistence, environment variables, and built-in accounts.
 
+## How TRAP21 Works
+
+A session moves through five stages:
+
+1. A client opens a real FTP control connection over TCP.
+2. Selected weak or anonymous credentials map the client to an account profile.
+3. The profile receives its own view of the decoy filesystem.
+4. Passive transfers serve decoy content or preserve uploaded bytes in quarantine.
+5. Commands, credentials, transfers, and hashes become JSONL evidence.
+
+TRAP21 supports the common command set expected by standard FTP clients and scanners. Transfers are passive-only; active mode (`PORT` and `EPRT`) and FTP over TLS are deliberately unavailable.
+
+<details>
+<summary><strong>View supported FTP commands</strong></summary>
+
+```text
+USER PASS QUIT NOOP SYST FEAT HELP CLNT
+PWD XPWD CWD XCWD CDUP XCUP
+TYPE MODE STRU OPTS
+PASV EPSV LIST NLST RETR STOR APPE
+SIZE MDTM MKD XMKD RMD XRMD DELE
+RNFR RNTO STAT ABOR
+```
+
+`APPE` appends to the current virtual file while preserving each captured artifact in quarantine. `TYPE A` converts between local line endings and FTP NVT ASCII. `ABOR` interrupts a pending or active passive transfer without closing the control session.
+
+</details>
+
 ## Inside the Trap
 
 A successful login looks like an ordinary managed FTP service:
@@ -98,34 +126,6 @@ Attempted passwords are intentionally stored in plaintext as honeypot telemetry.
 Uploaded bytes are stored beneath `data/quarantine/<session-id>/`. The virtual tree receives a placeholder and metadata mapping, allowing the client to list and retrieve the captured upload while TRAP21 is running.
 
 TRAP21 never executes, parses, unpacks, or forwards uploaded content. Deleting a file through FTP removes its virtual presence but preserves the quarantine artifact. File count, total bytes, artifact age, and event-log growth are bounded by configurable retention limits.
-
-## How TRAP21 Works
-
-A session moves through five stages:
-
-1. A client opens a real FTP control connection over TCP.
-2. Selected weak or anonymous credentials map the client to an account profile.
-3. The profile receives its own view of the decoy filesystem.
-4. Passive transfers serve decoy content or preserve uploaded bytes in quarantine.
-5. Commands, credentials, transfers, and hashes become JSONL evidence.
-
-TRAP21 supports the common command set expected by standard FTP clients and scanners. Transfers are passive-only; active mode (`PORT` and `EPRT`) and FTP over TLS are deliberately unavailable.
-
-<details>
-<summary><strong>View supported FTP commands</strong></summary>
-
-```text
-USER PASS QUIT NOOP SYST FEAT HELP CLNT
-PWD XPWD CWD XCWD CDUP XCUP
-TYPE MODE STRU OPTS
-PASV EPSV LIST NLST RETR STOR APPE
-SIZE MDTM MKD XMKD RMD XRMD DELE
-RNFR RNTO STAT ABOR
-```
-
-`APPE` appends to the current virtual file while preserving each captured artifact in quarantine. `TYPE A` converts between local line endings and FTP NVT ASCII. `ABOR` interrupts a pending or active passive transfer without closing the control session.
-
-</details>
 
 ## Scope and Safeguards
 
