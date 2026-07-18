@@ -127,19 +127,6 @@ RNFR RNTO STAT ABOR
 
 </details>
 
-## Development
-
-In VS Code, run **Terminal → Run Task → TRAP21: Test with Docker**. The recommended workspace extensions are Extension Pack for Java, GitHub Pull Requests and Issues, and YAML. A local JDK is optional when using the Docker task.
-
-With JDK 21 available through `JAVA_HOME` or `PATH`:
-
-```powershell
-./scripts/test.ps1
-java -jar ./build/trap21.jar
-```
-
-The direct Java process listens on `2121` by default, avoiding the privileged FTP port during development.
-
 ## Scope and Safeguards
 
 TRAP21 is intentionally bounded:
