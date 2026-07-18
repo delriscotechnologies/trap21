@@ -25,6 +25,8 @@ TRAP21 uses the following environment variables:
 | `TRAP21_MAX_SESSIONS` | `64` | Concurrent session limit |
 | `TRAP21_MAX_SESSIONS_PER_IP` | `8` | Concurrent sessions allowed per source address |
 
+`COMMAND` telemetry is limited to 100 events per second for each session. Additional command events are represented by a `COMMANDS_SUPPRESSED` summary. FTP responses and higher-value authentication, transfer, upload, error, and lifecycle events are unaffected.
+
 ## Remote deployment
 
 The Compose configuration publishes only on `127.0.0.1` by default. For an authorized remote deployment, set both values explicitly in `.env`:
@@ -38,24 +40,12 @@ TRAP21_PUBLIC_HOST=<public IPv4>
 
 ## Data persistence
 
-Compose stores telemetry and quarantine data in the named volume `trap21-data`, preserving the image's non-root ownership. Use `docker compose down -v` only when you intentionally want to delete that evidence volume.
+Compose stores telemetry and quarantine data in the named volume `trap21-data`, preserving the image's non-root ownership. On startup, the supplied container applies owner-only permissions to the evidence tree: `0700` for directories and `0600` for files. New artifacts inherit a restrictive `077` umask. Use `docker compose down -v` only when you intentionally want to delete that evidence volume.
 
 Age-based quarantine pruning runs at startup and is checked before new captures. Artifacts still mapped into the live virtual filesystem remain available for the life of that server process, so `TRAP21_RETENTION_DAYS` is a pruning threshold rather than a guaranteed maximum age for every live artifact.
 
 ## Default credentials
 
-The built-in passwords are intentionally weak. The [NordPass 2025 global password list](https://nordpass.com/most-common-passwords-list/) was used as a reference when curating a varied decoy credential set; the table below is not a reproduction of the NordPass ranking. `Telemetry rank` is an internal TRAP21 label used to sort and analyze observations.
+The built-in passwords are intentionally weak and were selected using the [NordPass 2025 global password list](https://nordpass.com/most-common-passwords-list/) as a reference. NordPass was used to guide the selection of believable, commonly used passwords for the decoy accounts; TRAP21 does not claim that its accounts reproduce particular ranking positions.
 
-| Username | Password | Telemetry rank | Profile |
-|---|---|---:|---|
-| `admin` | `admin123` | 10 | Administrator |
-| `administrator` | `P@ssw0rd` | 15 | Administrator |
-| `ftp` | `112233` | 20 | Transfer |
-| `ftpadmin` | `qwerty123` | 25 | Administrator |
-| `ftpuser` | `87654321` | 30 | Transfer |
-| `backup` | `Aa112233` | 35 | Backup |
-| `operator` | `Password@123` | 40 | Operations |
-| `service` | `Admin123` | 45 | Transfer service |
-| `guest` | `121212` | 50 | Guest |
-
-The `anonymous` account accepts a password containing an email-style `@` separator and receives read-only access to `/pub`.
+The decoy usernames, passwords, and access profiles are defined in `CredentialStore.java`. They are honeypot credentials only and must never be reused for real systems. The `anonymous` account accepts a password containing an email-style `@` separator and receives read-only access to `/pub`.
