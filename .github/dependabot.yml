@@ -17,3 +17,7 @@ updates:
       container-images:
         patterns:
           - "*"
+    ignore:
+      - dependency-name: eclipse-temurin
+        update-types:
+          - version-update:semver-major
