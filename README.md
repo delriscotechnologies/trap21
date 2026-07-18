@@ -111,27 +111,6 @@ java -jar ./build/trap21.jar
 
 The direct Java process listens on port `2121` by default, avoiding the privileged/public FTP port during development.
 
-## Filesystem profiles
-
-TRAP21 seeds a virtual tree beneath `data/vfs`:
-
-```text
-/
-├── archive/completed/
-├── backups/{daily,monthly,incoming}/
-├── config/
-├── incoming/
-├── logs/
-├── outgoing/
-├── pub/
-├── reports/
-└── users/{admin,backup,ftpuser}/
-```
-
-Transfer accounts can see `/incoming`, `/outgoing`, `/pub`, and an intentionally leaked `/archive/completed`. Backup, operations, service, guest, and anonymous accounts each receive different views. Administrator accounts can explore the entire virtual tree.
-
-Paths such as `../../../../Windows/System32` normalize inside the virtual root. TRAP21 also rejects symbolic links anywhere beneath the virtual filesystem or quarantine tree. The containment boundary still depends on mounting only the dedicated data directory and preventing untrusted local processes from modifying it while the server is running.
-
 ## FTP commands
 
 TRAP21 implements the common commands needed by standard clients and scanners:
