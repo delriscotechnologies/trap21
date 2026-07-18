@@ -11,7 +11,6 @@
 <p align="center">
   <a href="#quick-start">Quick Start</a> ·
   <a href="#inside-the-trap">Client View</a> ·
-  <a href="#evidence-collected">Evidence</a> ·
   <a href="docs/CONFIGURATION.md">Configuration</a> ·
   <a href="SECURITY.md">Security</a>
 </p>
