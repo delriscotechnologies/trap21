@@ -15,11 +15,11 @@ TRAP21 uses the following environment variables:
 | `TRAP21_DATA_DIR` | `data` | VFS, telemetry, and quarantine root |
 | `TRAP21_IDLE_TIMEOUT` | `120` | Control idle timeout in seconds |
 | `TRAP21_COMMAND_TIMEOUT` | `15` | Absolute time to finish a command after its first byte |
-| `TRAP21_DATA_TIMEOUT` | `15` | Data connection timeout in seconds |
+| `TRAP21_DATA_TIMEOUT` | `15` | Time allowed to establish or use a passive data connection |
 | `TRAP21_MAX_UPLOAD_BYTES` | `10485760` | Maximum upload size |
 | `TRAP21_MAX_QUARANTINE_BYTES` | `268435456` | Total retained quarantine-byte limit |
 | `TRAP21_MAX_QUARANTINE_FILES` | `4096` | Total retained quarantine-file limit |
-| `TRAP21_RETENTION_DAYS` | `30` | Age limit for historical quarantine artifacts |
+| `TRAP21_RETENTION_DAYS` | `30` | Age threshold used during quarantine pruning |
 | `TRAP21_MAX_EVENT_LOG_BYTES` | `33554432` | Rotate the active JSONL log at this size |
 | `TRAP21_MAX_EVENT_ARCHIVES` | `5` | Rotated JSONL archives to retain |
 | `TRAP21_MAX_SESSIONS` | `64` | Concurrent session limit |
@@ -40,11 +40,13 @@ TRAP21_PUBLIC_HOST=<public IPv4>
 
 Compose stores telemetry and quarantine data in the named volume `trap21-data`, preserving the image's non-root ownership. Use `docker compose down -v` only when you intentionally want to delete that evidence volume.
 
+Age-based quarantine pruning runs at startup and is checked before new captures. Artifacts still mapped into the live virtual filesystem remain available for the life of that server process, so `TRAP21_RETENTION_DAYS` is a pruning threshold rather than a guaranteed maximum age for every live artifact.
+
 ## Default credentials
 
-The passwords are intentionally weak. They are pinned to positions 10, 15, 20, and every fifth position after that in the [NordPass 2025 global password ranking](https://nordpass.com/most-common-passwords-list/).
+The built-in passwords are intentionally weak. The [NordPass 2025 global password list](https://nordpass.com/most-common-passwords-list/) was used as a reference when curating a varied decoy credential set; the table below is not a reproduction of the NordPass ranking. `Telemetry rank` is an internal TRAP21 label used to sort and analyze observations.
 
-| Username | Password | Rank | Profile |
+| Username | Password | Telemetry rank | Profile |
 |---|---|---:|---|
 | `admin` | `admin123` | 10 | Administrator |
 | `administrator` | `P@ssw0rd` | 15 | Administrator |
