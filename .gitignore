@@ -12,6 +12,7 @@ data/*
 *.local
 
 # IDE and OS noise
+.vscode/
 .idea/
 *.iml
 .DS_Store
