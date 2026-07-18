@@ -37,7 +37,8 @@ jobs:
             fi
             sleep 1
           done
-          docker compose exec -T trap21 sh -c 'test "$(id -u)" -ne 0 && test -w /app/data && test "$(stat -c %a /app/data)" = 700'
+          printf 'ci evidence\n' | curl --fail --silent --show-error --user "ftpuser:87654321" --upload-file - "ftp://127.0.0.1/incoming/ci-evidence.txt"
+          docker compose exec -T trap21 sh -c 'test "$(id -u)" -ne 0 && test -w /app/data && test "$(stat -c %a /app/data)" = 700 && test "$(stat -c %a /app/data/events.jsonl)" = 600 && evidence="$(find /app/data/quarantine -type f -print -quit)" && test -n "$evidence" && test "$(stat -c %a "$evidence")" = 600 && test "$(stat -c %a "$(dirname "$evidence")")" = 700'
 
       - name: Tear down Compose smoke test
         if: always()
