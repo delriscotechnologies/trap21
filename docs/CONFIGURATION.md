@@ -25,7 +25,7 @@ TRAP21 uses the following environment variables:
 | `TRAP21_MAX_SESSIONS` | `64` | Concurrent session limit |
 | `TRAP21_MAX_SESSIONS_PER_IP` | `8` | Concurrent sessions allowed per source address |
 
-`COMMAND` telemetry is limited to 100 events per second for each session. Additional command events are represented by a `COMMANDS_SUPPRESSED` summary. FTP responses and higher-value authentication, transfer, upload, error, and lifecycle events are unaffected.
+Telemetry limits are internal and do not throttle or alter FTP responses. For each session, TRAP21 retains up to 100 `COMMAND` events and 25 failed `AUTH_ATTEMPT` events per second. Additional events are represented by `COMMANDS_SUPPRESSED` and `AUTH_ATTEMPTS_SUPPRESSED` summaries. Successful authentication attempts and all upload, transfer, error, and lifecycle events are always retained. Authentication summaries record counts of distinct usernames and passwords without retaining each additional plaintext password.
 
 ## Remote deployment
 
