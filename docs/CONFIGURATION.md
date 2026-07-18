@@ -15,15 +15,17 @@ TRAP21 uses the following environment variables:
 | `TRAP21_DATA_DIR` | `data` | VFS, telemetry, and quarantine root |
 | `TRAP21_IDLE_TIMEOUT` | `120` | Control idle timeout in seconds |
 | `TRAP21_COMMAND_TIMEOUT` | `15` | Absolute time to finish a command after its first byte |
-| `TRAP21_DATA_TIMEOUT` | `15` | Data connection timeout in seconds |
+| `TRAP21_DATA_TIMEOUT` | `15` | Time allowed to establish or use a passive data connection |
 | `TRAP21_MAX_UPLOAD_BYTES` | `10485760` | Maximum upload size |
 | `TRAP21_MAX_QUARANTINE_BYTES` | `268435456` | Total retained quarantine-byte limit |
 | `TRAP21_MAX_QUARANTINE_FILES` | `4096` | Total retained quarantine-file limit |
-| `TRAP21_RETENTION_DAYS` | `30` | Age limit for historical quarantine artifacts |
+| `TRAP21_RETENTION_DAYS` | `30` | Age threshold used during quarantine pruning |
 | `TRAP21_MAX_EVENT_LOG_BYTES` | `33554432` | Rotate the active JSONL log at this size |
 | `TRAP21_MAX_EVENT_ARCHIVES` | `5` | Rotated JSONL archives to retain |
 | `TRAP21_MAX_SESSIONS` | `64` | Concurrent session limit |
 | `TRAP21_MAX_SESSIONS_PER_IP` | `8` | Concurrent sessions allowed per source address |
+
+Telemetry limits are internal and do not throttle or alter FTP responses. For each session, TRAP21 retains up to 100 `COMMAND` events and 25 failed `AUTH_ATTEMPT` events per second. Additional events are represented by `COMMANDS_SUPPRESSED` and `AUTH_ATTEMPTS_SUPPRESSED` summaries. Successful authentication attempts and all upload, transfer, error, and lifecycle events are always retained. Authentication summaries record counts of distinct usernames and passwords without retaining each additional plaintext password.
 
 ## Remote deployment
 
@@ -38,22 +40,12 @@ TRAP21_PUBLIC_HOST=<public IPv4>
 
 ## Data persistence
 
-Compose stores telemetry and quarantine data in the named volume `trap21-data`, preserving the image's non-root ownership. Use `docker compose down -v` only when you intentionally want to delete that evidence volume.
+Compose stores telemetry and quarantine data in the named volume `trap21-data`, preserving the image's non-root ownership. On startup, the supplied container applies owner-only permissions to the evidence tree: `0700` for directories and `0600` for files. New artifacts inherit a restrictive `077` umask. Use `docker compose down -v` only when you intentionally want to delete that evidence volume.
+
+Age-based quarantine pruning runs at startup and is checked before new captures. Artifacts still mapped into the live virtual filesystem remain available for the life of that server process, so `TRAP21_RETENTION_DAYS` is a pruning threshold rather than a guaranteed maximum age for every live artifact.
 
 ## Default credentials
 
-The passwords are intentionally weak. They are pinned to positions 10, 15, 20, and every fifth position after that in the [NordPass 2025 global password ranking](https://nordpass.com/most-common-passwords-list/).
+The built-in passwords are intentionally weak and were selected using the [NordPass 2025 global password list](https://nordpass.com/most-common-passwords-list/) as a reference. NordPass was used to guide the selection of believable, commonly used passwords for the decoy accounts; TRAP21 does not claim that its accounts reproduce particular ranking positions.
 
-| Username | Password | Rank | Profile |
-|---|---|---:|---|
-| `admin` | `admin123` | 10 | Administrator |
-| `administrator` | `P@ssw0rd` | 15 | Administrator |
-| `ftp` | `112233` | 20 | Transfer |
-| `ftpadmin` | `qwerty123` | 25 | Administrator |
-| `ftpuser` | `87654321` | 30 | Transfer |
-| `backup` | `Aa112233` | 35 | Backup |
-| `operator` | `Password@123` | 40 | Operations |
-| `service` | `Admin123` | 45 | Transfer service |
-| `guest` | `121212` | 50 | Guest |
-
-The `anonymous` account accepts a password containing an email-style `@` separator and receives read-only access to `/pub`.
+The decoy usernames, passwords, and access profiles are defined in `CredentialStore.java`. They are honeypot credentials only and must never be reused for real systems. The `anonymous` account accepts a password containing an email-style `@` separator and receives read-only access to `/pub`.
