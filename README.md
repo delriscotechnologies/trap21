@@ -23,26 +23,35 @@ Everything happens through a real FTP client. There is no web dashboard, operato
 
 ## Quick Start
 
-Start the localhost-only Docker Compose deployment:
+TRAP21 requires **Git** and **Docker with Compose**. Clone the repository and enter the project directory:
+
+```powershell
+git clone https://github.com/delriscotechnologies/trap21.git
+cd trap21
+```
+
+Create the local environment file and start the service:
 
 ```powershell
 Copy-Item .env.example .env
 docker compose up --build
 ```
 
-The service publishes:
+On macOS or Linux, use `cp .env.example .env` instead of `Copy-Item`.
 
-- FTP control on `21/tcp`
-- Passive data on `30000-30009/tcp`
+The default deployment is available only from the local machine:
 
-Test it with the built-in transfer account:
+- FTP control on `127.0.0.1:21`
+- Passive data on `127.0.0.1:30000-30009`
+
+Keep Docker Compose running and open a second terminal to test the built-in transfer account:
 
 ```powershell
 curl.exe --user "ftpuser:87654321" "ftp://127.0.0.1/"
 curl.exe --user "ftpuser:87654321" "ftp://127.0.0.1/pub/README.txt"
 ```
 
-Stop the service:
+When finished, stop the running process with **Ctrl+C**, then remove the Compose resources:
 
 ```powershell
 docker compose down
