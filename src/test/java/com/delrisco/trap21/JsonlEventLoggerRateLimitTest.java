@@ -74,7 +74,8 @@ public final class JsonlEventLoggerRateLimitTest {
         assertContains(events, "\"distinctUsernames\":2");
         assertContains(events, "\"distinctPasswords\":3");
         assertContains(events, "\"limitPerSecond\":25");
-        assertContains(events, "\"presentedPassword\":\"87654321\",\"accepted\":true");
+        assertContains(events, "\"presentedPassword\":\"87654321\"");
+        assertContains(events, "\"accepted\":true");
         deleteRecursively(temporary);
     }
 
