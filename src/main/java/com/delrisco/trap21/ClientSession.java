@@ -25,6 +25,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ClientSession {
@@ -44,6 +46,7 @@ final class ClientSession {
     private final String sessionId = UUID.randomUUID().toString();
     private final Instant connectedAt = Instant.now();
     private final AtomicReference<TransferState> activeTransfer = new AtomicReference<>();
+    private final AtomicBoolean sessionExpired = new AtomicBoolean();
     private BoundedLineReader reader;
     private BufferedWriter writer;
     private CredentialStore.UserAccount account;
@@ -52,7 +55,7 @@ final class ClientSession {
     private String renameFrom;
     private String transferType = "I";
     private String clientName = "unknown";
-    private ServerSocket passiveListener;
+    private volatile ServerSocket passiveListener;
 
     ClientSession(
             Trap21Config config,
@@ -75,7 +78,11 @@ final class ClientSession {
                 config.idleTimeoutSeconds(),
                 config.commandTimeoutSeconds());
         writer = new BufferedWriter(new OutputStreamWriter(control.getOutputStream(), StandardCharsets.UTF_8));
-        log("CONNECT", Map.of("status", "OPEN"));
+        Thread watchdog = startSessionWatchdog();
+        if (!log("CONNECT", Map.of("status", "OPEN"))) {
+            watchdog.interrupt();
+            throw new IOException("Telemetry persistence is unavailable");
+        }
         sendRaw(BANNER);
 
         String line;
@@ -94,7 +101,13 @@ final class ClientSession {
         } catch (SocketTimeoutException exception) {
             send(421, "Control connection timed out.");
             log("TIMEOUT", Map.of("channel", "control"));
+        } catch (IOException exception) {
+            if (!sessionExpired.get()) {
+                throw exception;
+            }
+            log("TIMEOUT", Map.of("channel", "session"));
         } finally {
+            watchdog.interrupt();
             cancelActiveTransfer(false);
             closePassive();
             log("DISCONNECT", Map.of(
@@ -158,32 +171,35 @@ final class ClientSession {
     }
 
     private boolean user(String username) throws IOException {
+        account = null;
+        pendingUsername = null;
+        renameFrom = null;
+        currentDirectory = "/";
         if (username == null || username.isBlank()) {
             send(501, "USER requires a username.");
             return true;
         }
         pendingUsername = username.trim().toLowerCase(Locale.ROOT);
-        account = null;
-        currentDirectory = "/";
         send(331, "Password required for " + pendingUsername + ".");
         return true;
     }
 
     private boolean password(String presentedPassword) throws IOException {
+        account = null;
+        renameFrom = null;
         if (pendingUsername == null) {
             send(503, "Login with USER first.");
             return true;
         }
+        String username = pendingUsername;
+        pendingUsername = null;
         String password = presentedPassword == null ? "" : presentedPassword;
-        Optional<CredentialStore.UserAccount> authenticated = credentials.authenticate(pendingUsername, password);
+        Optional<CredentialStore.UserAccount> authenticated = credentials.authenticate(username, password);
         Map<String, Object> event = new LinkedHashMap<>();
-        event.put("username", pendingUsername);
+        event.put("username", username);
         event.put("presentedPassword", password);
         event.put("accepted", authenticated.isPresent());
-        authenticated.ifPresent(value -> {
-            event.put("passwordRank", value.passwordRank());
-            event.put("profile", value.profile().name());
-        });
+        authenticated.ifPresent(value -> event.put("profile", value.profile().name()));
         log("AUTH_ATTEMPT", event);
         if (authenticated.isEmpty()) {
             send(530, "Login incorrect.");
@@ -340,7 +356,7 @@ final class ClientSession {
     }
 
     private boolean list(String argument, boolean namesOnly) throws IOException {
-        boolean includeHidden = argument != null && argument.contains("a");
+        boolean includeHidden = hasListOption(argument, 'a');
         String pathArgument = listPath(argument);
         String target;
         try {
@@ -667,6 +683,11 @@ final class ClientSession {
                 send(552, "Requested file action aborted; file limit exceeded.");
                 log("UPLOAD", Map.of("path", target, "status", "FILE_LIMIT_EXCEEDED"));
             }
+        } catch (VirtualFileSystem.VfsEntryLimitExceededException exception) {
+            if (completeTransfer(state)) {
+                send(452, "Requested action not taken; virtual filesystem capacity exceeded.");
+                log("UPLOAD", Map.of("path", target, "status", "VFS_LIMIT_EXCEEDED"));
+            }
         } catch (VirtualFileSystem.StorageQuotaExceededException exception) {
             if (completeTransfer(state)) {
                 send(452, "Requested action not taken; quarantine capacity exceeded.");
@@ -753,6 +774,37 @@ final class ClientSession {
                 entry.name());
     }
 
+    private static boolean hasListOption(String argument, char option) {
+        if (argument == null || argument.isBlank()) {
+            return false;
+        }
+        for (String token : argument.trim().split("\\s+")) {
+            if (!token.startsWith("-") || "--".equals(token)) {
+                break;
+            }
+            if (token.substring(1).indexOf(option) >= 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Thread startSessionWatchdog() {
+        return Thread.ofVirtual().name("trap21-session-watchdog-" + sessionId).start(() -> {
+            try {
+                TimeUnit.SECONDS.sleep(config.maxSessionSeconds());
+                sessionExpired.set(true);
+                cancelActiveTransfer(false);
+                closePassive();
+                control.close();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            } catch (IOException ignored) {
+                // Closing an expired session is best-effort.
+            }
+        });
+    }
+
     private String listPath(String argument) {
         if (argument == null || argument.isBlank()) {
             return currentDirectory;
@@ -805,14 +857,14 @@ final class ClientSession {
                 "argument", "PASS".equals(command.name()) ? "<redacted>" : command.argumentOrEmpty()));
     }
 
-    private void log(String eventType, Map<String, ?> values) {
+    private boolean log(String eventType, Map<String, ?> values) {
         Map<String, Object> event = new LinkedHashMap<>();
         event.put("sessionId", sessionId);
         event.put("sourceIp", sourceIp());
         event.put("sourcePort", control.getPort());
         event.put("username", account == null ? pendingUsername : account.username());
         event.putAll(values);
-        logger.log(eventType, event);
+        return logger.log(eventType, event);
     }
 
     private String sourceIp() {
