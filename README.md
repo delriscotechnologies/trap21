@@ -120,7 +120,7 @@ Events are appended to `data/events.jsonl` as the session unfolds:
 
 Individually retained authentication attempts store presented passwords in plaintext as honeypot telemetry. Protect the data directory, limit operator access, and treat accidental use of real credentials as sensitive data.
 
-High-rate activity does not change the FTP responses seen by the visitor. For each session, the logger retains up to 100 `COMMAND` events and 25 failed `AUTH_ATTEMPT` events per second. Additional events are represented by `COMMANDS_SUPPRESSED` or `AUTH_ATTEMPTS_SUPPRESSED` summaries. Authentication successes, uploads, transfer results, failures, and lifecycle events bypass rate suppression; authentication summaries expose counts of distinct usernames and passwords rather than the additional plaintext values.
+High-rate activity does not change the FTP responses seen by the visitor. For each session, the logger retains up to 100 `COMMAND` events and 25 failed `AUTH_ATTEMPT` events per second. Additional events are represented by `COMMANDS_SUPPRESSED` or `AUTH_ATTEMPTS_SUPPRESSED` summaries. Authentication successes, uploads, transfer results, failures, and lifecycle events bypass rate suppression. Authentication summaries count SHA-256 fingerprints instead of retaining the additional plaintext values; each distinct count is capped at 256 per window and `distinctCountsTruncated` is emitted when either cap is exceeded.
 
 ### Quarantined uploads
 

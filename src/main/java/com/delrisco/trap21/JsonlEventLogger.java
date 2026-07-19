@@ -9,10 +9,13 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -20,6 +23,7 @@ import java.util.Set;
 final class JsonlEventLogger implements Closeable {
     private static final int MAX_COMMAND_EVENTS_PER_SECOND = 100;
     private static final int MAX_FAILED_AUTH_EVENTS_PER_SECOND = 25;
+    private static final int MAX_DISTINCT_AUTH_VALUES_PER_WINDOW = 256;
     private static final long EVENT_WINDOW_MILLIS = 1_000L;
 
     private final Path file;
@@ -255,6 +259,9 @@ final class JsonlEventLogger implements Closeable {
         summary.put("suppressed", window.suppressedEvents);
         summary.put("distinctUsernames", window.usernames.size());
         summary.put("distinctPasswords", window.passwords.size());
+        if (window.usernames.truncated() || window.passwords.truncated()) {
+            summary.put("distinctCountsTruncated", true);
+        }
         summary.put("limitPerSecond", MAX_FAILED_AUTH_EVENTS_PER_SECOND);
         summary.put("windowMillis", EVENT_WINDOW_MILLIS);
         writeEvent(now, "AUTH_ATTEMPTS_SUPPRESSED", summary);
@@ -401,8 +408,8 @@ final class JsonlEventLogger implements Closeable {
     }
 
     private static final class AuthWindow extends EventWindow {
-        private final Set<String> usernames = new HashSet<>();
-        private final Set<String> passwords = new HashSet<>();
+        private final BoundedDistinctValues usernames = new BoundedDistinctValues();
+        private final BoundedDistinctValues passwords = new BoundedDistinctValues();
 
         AuthWindow(long startedAtMillis) {
             super(startedAtMillis);
@@ -421,9 +428,48 @@ final class JsonlEventLogger implements Closeable {
             passwords.clear();
         }
 
-        private static void addIfPresent(Set<String> values, Object value) {
+        private static void addIfPresent(BoundedDistinctValues values, Object value) {
             if (value != null) {
                 values.add(String.valueOf(value));
+            }
+        }
+    }
+
+    private static final class BoundedDistinctValues {
+        private final Set<String> fingerprints = new HashSet<>();
+        private boolean truncated;
+
+        void add(String value) {
+            String fingerprint = fingerprint(value);
+            if (fingerprints.contains(fingerprint)) {
+                return;
+            }
+            if (fingerprints.size() >= MAX_DISTINCT_AUTH_VALUES_PER_WINDOW) {
+                truncated = true;
+                return;
+            }
+            fingerprints.add(fingerprint);
+        }
+
+        int size() {
+            return fingerprints.size();
+        }
+
+        boolean truncated() {
+            return truncated;
+        }
+
+        void clear() {
+            fingerprints.clear();
+            truncated = false;
+        }
+
+        private static String fingerprint(String value) {
+            try {
+                MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
+            } catch (NoSuchAlgorithmException exception) {
+                throw new IllegalStateException("SHA-256 is unavailable", exception);
             }
         }
     }

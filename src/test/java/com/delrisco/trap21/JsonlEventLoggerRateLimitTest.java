@@ -18,6 +18,7 @@ public final class JsonlEventLoggerRateLimitTest {
     public static void main(String[] args) throws Exception {
         testCommandSuppression();
         testFailedAuthenticationSuppression();
+        testFailedAuthenticationDistinctValueLimit();
         testWindowRollover();
         System.out.println("TRAP21 logger rate-limit tests passed");
     }
@@ -99,6 +100,32 @@ public final class JsonlEventLoggerRateLimitTest {
         deleteRecursively(temporary);
     }
 
+    private static void testFailedAuthenticationDistinctValueLimit() throws Exception {
+        Path temporary = Files.createTempDirectory("trap21-auth-distinct-limit-");
+        Path eventLog = temporary.resolve("events.jsonl");
+        MutableClock clock = MutableClock.at("2026-07-18T12:07:00Z");
+        try (JsonlEventLogger logger = new JsonlEventLogger(eventLog, 1024 * 1024, 2, clock)) {
+            for (int index = 0; index < 300; index++) {
+                logger.log("AUTH_ATTEMPT", Map.of(
+                        "sessionId", "bounded-auth-session",
+                        "sourceIp", "192.0.2.21",
+                        "sourcePort", 2121,
+                        "username", "user-" + index,
+                        "presentedPassword", "password-" + index,
+                        "accepted", false));
+            }
+        }
+
+        String events = Files.readString(eventLog, StandardCharsets.UTF_8);
+        assertContains(events, "\"eventType\":\"AUTH_ATTEMPTS_SUPPRESSED\"");
+        assertContains(events, "\"suppressed\":275");
+        assertContains(events, "\"distinctUsernames\":256");
+        assertContains(events, "\"distinctPasswords\":256");
+        assertContains(events, "\"distinctCountsTruncated\":true");
+        assertNotContains(events, "\"presentedPassword\":\"password-299\"");
+        deleteRecursively(temporary);
+    }
+
     private static Map<String, Object> commandEvent(String sessionId) {
         return Map.of(
                 "sessionId", sessionId,
@@ -139,6 +166,12 @@ public final class JsonlEventLoggerRateLimitTest {
     private static void assertContains(String actual, String expected) {
         if (!actual.contains(expected)) {
             throw new AssertionError("Expected <" + actual + "> to contain <" + expected + ">");
+        }
+    }
+
+    private static void assertNotContains(String actual, String expected) {
+        if (actual.contains(expected)) {
+            throw new AssertionError("Expected <" + actual + "> not to contain <" + expected + ">");
         }
     }
 
