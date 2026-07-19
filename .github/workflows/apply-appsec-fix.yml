@@ -44,3 +44,4 @@ jobs:
           git add -A
           git commit -m "Fix AppSec boundary enforcement"
           git push origin HEAD:agent/fix-appsec-followup
+
