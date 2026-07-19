@@ -242,40 +242,37 @@ final class VirtualFileSystem {
         validateFileName(originalName);
         Path sessionDirectory = quarantine.resolve(safeSegment(sessionId)).normalize();
         assertInside(quarantine, sessionDirectory);
-        Files.createDirectories(sessionDirectory);
-        assertNoSymbolicLinkComponents(quarantine, sessionDirectory);
         Path capturedPath = sessionDirectory.resolve(UUID.randomUUID() + "_" + safeSegment(originalName)).normalize();
         assertInside(sessionDirectory, capturedPath);
 
         MessageDigest digest = sha256();
         long total = 0;
-        try (OutputStream output = Files.newOutputStream(
-                capturedPath,
-                StandardOpenOption.CREATE_NEW,
-                StandardOpenOption.WRITE,
-                LinkOption.NOFOLLOW_LINKS)) {
-            if (appendSource != null) {
-                try (InputStream existing = Files.newInputStream(appendSource, LinkOption.NOFOLLOW_LINKS)) {
-                    total = copyLimited(
-                            existing, output, digest, total, maximumBytes, remainingQuarantineBytes,
-                            maxQuarantineBytes, maxQuarantineFiles);
-                }
-            }
-            total = copyLimited(
-                    input, output, digest, total, maximumBytes, remainingQuarantineBytes,
-                    maxQuarantineBytes, maxQuarantineFiles);
-        } catch (IOException exception) {
-            Files.deleteIfExists(capturedPath);
-            throw exception;
-        }
-
         try {
+            Files.createDirectories(sessionDirectory);
+            assertNoSymbolicLinkComponents(quarantine, sessionDirectory);
+            try (OutputStream output = Files.newOutputStream(
+                    capturedPath,
+                    StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.WRITE,
+                    LinkOption.NOFOLLOW_LINKS)) {
+                if (appendSource != null) {
+                    try (InputStream existing = Files.newInputStream(appendSource, LinkOption.NOFOLLOW_LINKS)) {
+                        total = copyLimited(
+                                existing, output, digest, total, maximumBytes, remainingQuarantineBytes,
+                                maxQuarantineBytes, maxQuarantineFiles);
+                    }
+                }
+                total = copyLimited(
+                        input, output, digest, total, maximumBytes, remainingQuarantineBytes,
+                        maxQuarantineBytes, maxQuarantineFiles);
+            }
+
             if (!visibleExists) {
                 Files.createFile(visiblePath);
                 vfsFiles++;
             }
         } catch (IOException exception) {
-            Files.deleteIfExists(capturedPath);
+            cleanupFailedCapture(capturedPath, sessionDirectory, exception);
             throw exception;
         }
         CapturedUpload upload = new CapturedUpload(
@@ -289,6 +286,24 @@ final class VirtualFileSystem {
         quarantineBytes += total;
         quarantineFiles++;
         return upload;
+    }
+
+    private static void cleanupFailedCapture(
+            Path capturedPath,
+            Path sessionDirectory,
+            IOException originalException) {
+        try {
+            Files.deleteIfExists(capturedPath);
+        } catch (IOException cleanupException) {
+            originalException.addSuppressed(cleanupException);
+        }
+        try {
+            Files.deleteIfExists(sessionDirectory);
+        } catch (DirectoryNotEmptyException | NoSuchFileException ignored) {
+            // Preserve an established session directory when it contains earlier captures.
+        } catch (IOException cleanupException) {
+            originalException.addSuppressed(cleanupException);
+        }
     }
 
     synchronized void makeDirectory(String virtualPath) throws IOException {

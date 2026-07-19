@@ -5,6 +5,7 @@ import java.io.BufferedWriter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.InetAddress;
@@ -104,6 +105,7 @@ public final class Trap21IntegrationTest {
         assertTrue(!Files.exists(temporary.resolve("Windows")), "Traversal created a path outside the virtual root");
 
         testStorageQuotaAndRetention();
+        testFailedCaptureCleanup();
         testVfsEntryBudgets();
         testSessionWatchdog();
         testEventLogRotation();
@@ -292,6 +294,44 @@ public final class Trap21IntegrationTest {
         deleteRecursively(temporary);
     }
 
+    private static void testFailedCaptureCleanup() throws Exception {
+        Path temporary = Files.createTempDirectory("trap21-failed-capture-");
+        try {
+            VirtualFileSystem fileSystem = new VirtualFileSystem(temporary, 1024, 10, 30, 100, 200);
+            InputStream failingInput = new InputStream() {
+                @Override
+                public int read() throws IOException {
+                    throw new IOException("simulated interrupted upload");
+                }
+            };
+
+            assertThrows(IOException.class,
+                    () -> fileSystem.capture("empty-session", "/incoming/failed.bin", failingInput, 1024, false),
+                    "Interrupted upload did not fail");
+            assertTrue(!Files.exists(temporary.resolve("quarantine/empty-session")),
+                    "Interrupted upload left an empty quarantine session directory");
+
+            fileSystem.capture("retained-session", "/incoming/complete.bin",
+                    new ByteArrayInputStream("complete".getBytes(StandardCharsets.UTF_8)), 1024, false);
+            assertThrows(IOException.class,
+                    () -> fileSystem.capture("retained-session", "/incoming/failed-again.bin",
+                            new InputStream() {
+                                @Override
+                                public int read() throws IOException {
+                                    throw new IOException("simulated interrupted upload");
+                                }
+                            },
+                            1024,
+                            false),
+                    "Second interrupted upload did not fail");
+            try (Stream<Path> paths = Files.list(temporary.resolve("quarantine/retained-session"))) {
+                assertTrue(paths.filter(Files::isRegularFile).count() == 1L,
+                        "Cleanup removed an earlier capture or retained the failed partial file");
+            }
+        } finally {
+            deleteRecursively(temporary);
+        }
+    }
 
     private static void testVfsEntryBudgets() throws Exception {
         Path temporary = Files.createTempDirectory("trap21-vfs-budget-");
