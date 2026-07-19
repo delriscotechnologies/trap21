@@ -55,7 +55,6 @@ public final class Trap21Server implements AutoCloseable {
             controlListener = new ServerSocket();
             controlListener.setReuseAddress(true);
             controlListener.bind(new InetSocketAddress(config.bindAddress(), config.controlPort()));
-            acceptThread = Thread.ofPlatform().name("trap21-control-listener").start(this::acceptLoop);
             logger.log("SERVER_STARTED", Map.of(
                     "bind", config.bindAddress().getHostAddress(),
                     "port", port(),
@@ -63,8 +62,19 @@ public final class Trap21Server implements AutoCloseable {
                     "passiveEnd", config.passivePortEnd(),
                     "virtualRoot", fileSystem.root().toString(),
                     "quarantine", fileSystem.quarantine().toString()));
+            if (!logger.isHealthy()) {
+                throw new IOException("Telemetry is unavailable; refusing to start the FTP listener");
+            }
+            acceptThread = Thread.ofPlatform().name("trap21-control-listener").start(this::acceptLoop);
         } catch (IOException exception) {
             running.set(false);
+            if (controlListener != null) {
+                try {
+                    controlListener.close();
+                } catch (IOException closeFailure) {
+                    exception.addSuppressed(closeFailure);
+                }
+            }
             throw exception;
         }
     }
@@ -126,6 +136,10 @@ public final class Trap21Server implements AutoCloseable {
 
     private boolean acquireCapacity(Socket socket) {
         String sourceIp = socket.getInetAddress().getHostAddress();
+        if (!logger.isHealthy()) {
+            rejectBusy(socket, "telemetry_unavailable", sourceIp);
+            return false;
+        }
         if (!capacity.tryAcquire()) {
             rejectBusy(socket, "capacity", sourceIp);
             return false;
@@ -153,7 +167,9 @@ public final class Trap21Server implements AutoCloseable {
         } catch (IOException ignored) {
             // The peer may disconnect before the overload response is written.
         }
-        logger.log("SESSION_REJECTED", Map.of("reason", reason, "sourceIp", sourceIp));
+        if (!"telemetry_unavailable".equals(reason)) {
+            logger.log("SESSION_REJECTED", Map.of("reason", reason, "sourceIp", sourceIp));
+        }
     }
 
     @Override
