@@ -1,9 +1,9 @@
 name: Apply validated AppSec fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/fix-appsec-followup
+      - main
 
 permissions:
   contents: write
@@ -44,4 +44,3 @@ jobs:
           git add -A
           git commit -m "Fix AppSec boundary enforcement"
           git push origin HEAD:agent/fix-appsec-followup
-
