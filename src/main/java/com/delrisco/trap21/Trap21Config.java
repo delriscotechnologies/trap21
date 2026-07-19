@@ -15,10 +15,13 @@ public record Trap21Config(
         int idleTimeoutSeconds,
         int commandTimeoutSeconds,
         int dataTimeoutSeconds,
+        int maxSessionSeconds,
         long maxUploadBytes,
         long maxQuarantineBytes,
         int maxQuarantineFiles,
         int retentionDays,
+        int maxVfsDirectories,
+        int maxVfsFiles,
         long maxEventLogBytes,
         int maxEventArchives,
         int maxSessions,
@@ -31,13 +34,14 @@ public record Trap21Config(
         if (passivePortStart < 0 || passivePortEnd > 65_535 || passivePortEnd < passivePortStart) {
             throw new IllegalArgumentException("Invalid passive port range");
         }
-        if (idleTimeoutSeconds < 1 || commandTimeoutSeconds < 1 || dataTimeoutSeconds < 1) {
+        if (idleTimeoutSeconds < 1 || commandTimeoutSeconds < 1 || dataTimeoutSeconds < 1 || maxSessionSeconds < 1) {
             throw new IllegalArgumentException("Timeouts must be positive");
         }
         if (maxUploadBytes < 1 || maxQuarantineBytes < maxUploadBytes) {
             throw new IllegalArgumentException("Quarantine capacity must allow at least one maximum-size upload");
         }
-        if (maxQuarantineFiles < 1 || retentionDays < 1 || maxEventLogBytes < 4096 || maxEventArchives < 1) {
+        if (maxQuarantineFiles < 1 || retentionDays < 1 || maxVfsDirectories < 1 || maxVfsFiles < 1
+                || maxEventLogBytes < 4096 || maxEventArchives < 1) {
             throw new IllegalArgumentException("Storage and retention limits must be positive");
         }
         if (maxSessions < 1 || maxSessionsPerIp < 1 || maxSessionsPerIp > maxSessions) {
@@ -60,10 +64,13 @@ public record Trap21Config(
                     integer(env, "TRAP21_IDLE_TIMEOUT", 120),
                     integer(env, "TRAP21_COMMAND_TIMEOUT", 15),
                     integer(env, "TRAP21_DATA_TIMEOUT", 15),
+                    integer(env, "TRAP21_MAX_SESSION_SECONDS", 120),
                     longInteger(env, "TRAP21_MAX_UPLOAD_BYTES", 10L * 1024 * 1024),
                     longInteger(env, "TRAP21_MAX_QUARANTINE_BYTES", 256L * 1024 * 1024),
                     integer(env, "TRAP21_MAX_QUARANTINE_FILES", 4096),
                     integer(env, "TRAP21_RETENTION_DAYS", 30),
+                    integer(env, "TRAP21_MAX_VFS_DIRECTORIES", 4096),
+                    integer(env, "TRAP21_MAX_VFS_FILES", 8192),
                     longInteger(env, "TRAP21_MAX_EVENT_LOG_BYTES", 32L * 1024 * 1024),
                     integer(env, "TRAP21_MAX_EVENT_ARCHIVES", 5),
                     integer(env, "TRAP21_MAX_SESSIONS", 64),
