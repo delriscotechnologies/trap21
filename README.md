@@ -120,13 +120,13 @@ Events are appended to `data/events.jsonl` as the session unfolds:
 
 Individually retained authentication attempts store presented passwords in plaintext as honeypot telemetry. Protect the data directory, limit operator access, and treat accidental use of real credentials as sensitive data.
 
-High-rate activity does not change the FTP responses seen by the visitor. For each session, the logger retains up to 100 `COMMAND` events and 25 failed `AUTH_ATTEMPT` events per second. Additional events are represented by `COMMANDS_SUPPRESSED` or `AUTH_ATTEMPTS_SUPPRESSED` summaries. Authentication successes, uploads, transfer results, failures, and lifecycle events bypass rate suppression; authentication summaries expose counts of distinct usernames and passwords rather than the additional plaintext values. If evidence persistence fails, TRAP21 rejects new sessions until the event writer recovers.
+High-rate activity does not change the FTP responses seen by the visitor. For each session, the logger retains up to 100 `COMMAND` events and 25 failed `AUTH_ATTEMPT` events per second. Additional events are represented by `COMMANDS_SUPPRESSED` or `AUTH_ATTEMPTS_SUPPRESSED` summaries. Authentication successes, uploads, transfer results, failures, and lifecycle events bypass rate suppression; authentication summaries expose counts of distinct usernames and passwords rather than the additional plaintext values.
 
 ### Quarantined uploads
 
 Uploaded bytes are stored beneath `data/quarantine/<session-id>/`. The virtual tree receives a placeholder and metadata mapping, allowing the client to list and retrieve the captured upload while TRAP21 is running.
 
-TRAP21 never executes, parses, unpacks, or forwards uploaded content. Deleting a file through FTP removes its virtual presence but preserves the quarantine artifact. Quarantine files and bytes, attacker-created directories, control-session lifetime, and event-log growth are bounded by configurable limits. Age-based pruning runs at startup and is checked before new captures; artifacts still mapped into the live virtual tree are retained for the life of that server process.
+TRAP21 never executes, parses, unpacks, or forwards uploaded content. Deleting a file through FTP removes its virtual presence but preserves the quarantine artifact. Quarantine files and bytes, persisted VFS files and directories, control-session lifetime, and event-log growth are bounded by configurable limits. Age-based pruning runs at startup and is checked before new captures; artifacts still mapped into the live virtual tree are retained for the life of that server process.
 
 The supplied container starts with a restrictive `077` umask and normalizes existing evidence to owner-only permissions: directories use `0700` and files use `0600`.
 
@@ -136,9 +136,9 @@ TRAP21 is intentionally vulnerable at the decoy interface and intentionally boun
 
 | Boundary | Enforcement |
 | --- | --- |
-| Filesystem | Paths stay inside a dedicated virtual root; symbolic links are rejected; attacker-created directories are capped |
-| Passive data | Connections must originate from the control-session source address; data waits expire through `TRAP21_DATA_TIMEOUT`; every control session has an absolute `TRAP21_MAX_SESSION_SECONDS` lifetime |
-| Resources | Commands, command deadlines, absolute session lifetime, data timeouts, directory growth, upload storage, telemetry, logs, and sessions are bounded |
+| Filesystem | Paths stay inside a dedicated virtual root; symbolic links are rejected; persisted file and directory counts are capped |
+| Passive data | Connections must originate from the control-session source address; waits expire through `TRAP21_DATA_TIMEOUT`; an independent watchdog closes the control socket, passive listener, and active transfer at `TRAP21_MAX_SESSION_SECONDS` |
+| Resources | Commands, deadlines, absolute session lifetime, VFS growth, upload storage, telemetry, logs, and sessions are bounded |
 | Container | The supplied image runs without root privileges or Linux capabilities and uses owner-only evidence permissions |
 | Execution | No shell, command execution, proxying, archive extraction, or malware execution |
 

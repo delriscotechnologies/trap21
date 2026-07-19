@@ -48,6 +48,14 @@ final class VirtualFileSystem {
         }
     }
 
+    static final class VfsEntryLimitExceededException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        VfsEntryLimitExceededException(int maximumDirectories, int maximumFiles) {
+            super("Virtual filesystem is limited to " + maximumDirectories + " directories and " + maximumFiles + " files");
+        }
+    }
+
     static final class StorageQuotaExceededException extends IOException {
         private static final long serialVersionUID = 1L;
 
@@ -61,19 +69,27 @@ final class VirtualFileSystem {
     private final long maxQuarantineBytes;
     private final int maxQuarantineFiles;
     private final int retentionDays;
+    private final int maxVfsDirectories;
+    private final int maxVfsFiles;
     private final Map<String, CapturedUpload> uploads = new ConcurrentHashMap<>();
     private long quarantineBytes;
     private int quarantineFiles;
+    private int vfsDirectories;
+    private int vfsFiles;
     private Instant nextPruneAt = Instant.EPOCH;
 
     VirtualFileSystem(
             Path dataDirectory,
             long maxQuarantineBytes,
             int maxQuarantineFiles,
-            int retentionDays) throws IOException {
+            int retentionDays,
+            int maxVfsDirectories,
+            int maxVfsFiles) throws IOException {
         this.maxQuarantineBytes = maxQuarantineBytes;
         this.maxQuarantineFiles = maxQuarantineFiles;
         this.retentionDays = retentionDays;
+        this.maxVfsDirectories = maxVfsDirectories;
+        this.maxVfsFiles = maxVfsFiles;
         Path normalizedData = dataDirectory.toAbsolutePath().normalize();
         Files.createDirectories(normalizedData);
         Path realData = normalizedData.toRealPath();
@@ -87,6 +103,7 @@ final class VirtualFileSystem {
         rejectSymbolicLinksInTree(quarantine);
         SeedData.populate(root);
         rejectSymbolicLinksInTree(root);
+        refreshVfsUsage();
         pruneExpiredQuarantine(true);
     }
 
@@ -207,6 +224,9 @@ final class VirtualFileSystem {
         }
         CapturedUpload previous = uploads.get(virtualPath);
         boolean visibleExists = Files.exists(visiblePath, LinkOption.NOFOLLOW_LINKS);
+        if (!visibleExists && vfsFiles >= maxVfsFiles) {
+            throw new VfsEntryLimitExceededException(maxVfsDirectories, maxVfsFiles);
+        }
         if (visibleExists && !append && previous == null) {
             throw new FileAlreadyExistsException("Refusing to replace a seeded decoy: " + virtualPath);
         }
@@ -252,6 +272,7 @@ final class VirtualFileSystem {
         try {
             if (!visibleExists) {
                 Files.createFile(visiblePath);
+                vfsFiles++;
             }
         } catch (IOException exception) {
             Files.deleteIfExists(capturedPath);
@@ -270,18 +291,23 @@ final class VirtualFileSystem {
         return upload;
     }
 
-    void makeDirectory(String virtualPath) throws IOException {
+    synchronized void makeDirectory(String virtualPath) throws IOException {
+        if (vfsDirectories >= maxVfsDirectories) {
+            throw new VfsEntryLimitExceededException(maxVfsDirectories, maxVfsFiles);
+        }
         Files.createDirectory(toHostPath(virtualPath));
+        vfsDirectories++;
     }
 
-    void removeDirectory(String virtualPath) throws IOException {
+    synchronized void removeDirectory(String virtualPath) throws IOException {
         if ("/".equals(virtualPath)) {
             throw new DirectoryNotEmptyException(virtualPath);
         }
         Files.delete(toHostPath(virtualPath));
+        vfsDirectories--;
     }
 
-    void delete(String virtualPath) throws IOException {
+    synchronized void delete(String virtualPath) throws IOException {
         uploads.remove(virtualPath);
         Path visible = toHostPath(virtualPath);
         if (!Files.exists(visible, LinkOption.NOFOLLOW_LINKS)
@@ -289,6 +315,7 @@ final class VirtualFileSystem {
             throw new NoSuchFileException(virtualPath);
         }
         Files.delete(visible);
+        vfsFiles--;
     }
 
     synchronized void rename(String sourceVirtual, String targetVirtual) throws IOException {
@@ -471,6 +498,23 @@ final class VirtualFileSystem {
         }
         refreshQuarantineUsage();
         nextPruneAt = now.plus(Duration.ofHours(1));
+    }
+
+
+    private void refreshVfsUsage() throws IOException {
+        int directories = 0;
+        int files = 0;
+        try (Stream<Path> paths = Files.walk(root)) {
+            for (Path path : paths.filter(candidate -> !candidate.equals(root)).toList()) {
+                if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) {
+                    directories = Math.addExact(directories, 1);
+                } else if (Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                    files = Math.addExact(files, 1);
+                }
+            }
+        }
+        vfsDirectories = directories;
+        vfsFiles = files;
     }
 
     private void refreshQuarantineUsage() throws IOException {

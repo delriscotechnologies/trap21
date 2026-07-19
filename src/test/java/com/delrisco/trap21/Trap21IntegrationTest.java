@@ -42,6 +42,8 @@ public final class Trap21IntegrationTest {
         Path temporary = Files.createTempDirectory("trap21-integration-");
         Path outside = Files.createTempDirectory("trap21-outside-");
         Files.writeString(outside.resolve("secret.txt"), "outside virtual root", StandardCharsets.UTF_8);
+        Files.createDirectories(temporary.resolve("vfs/archive"));
+        Files.writeString(temporary.resolve("vfs/archive/.operator-note"), "hidden", StandardCharsets.UTF_8);
         Trap21Config config = new Trap21Config(
                 InetAddress.getByName("127.0.0.1"),
                 0,
@@ -52,10 +54,13 @@ public final class Trap21IntegrationTest {
                 10,
                 3,
                 5,
+                30,
                 1024 * 1024,
                 16L * 1024 * 1024,
                 100,
                 30,
+                100,
+                200,
                 1024 * 1024,
                 3,
                 8,
@@ -65,6 +70,8 @@ public final class Trap21IntegrationTest {
             server.start();
             testDefaultCredentialsAndTransfers(server.port());
             testInvalidCredentials(server.port());
+            testAuthenticationStateReset(server.port());
+            testListOptionParsing(server.port());
             testAnonymousIsolation(server.port());
             testSymbolicLinkIsolation(server.port(), temporary, outside);
             testCapturedDirectoryRename(server.port());
@@ -97,6 +104,8 @@ public final class Trap21IntegrationTest {
         assertTrue(!Files.exists(temporary.resolve("Windows")), "Traversal created a path outside the virtual root");
 
         testStorageQuotaAndRetention();
+        testVfsEntryBudgets();
+        testSessionWatchdog();
         testEventLogRotation();
 
         deleteRecursively(temporary);
@@ -150,6 +159,34 @@ public final class Trap21IntegrationTest {
             client.expect("USER admin", 331);
             client.expect("PASS incorrect", 530);
             client.expect("PWD", 530);
+            client.expect("QUIT", 221);
+        }
+    }
+
+
+    private static void testAuthenticationStateReset(int port) throws Exception {
+        try (FtpClient client = new FtpClient(port)) {
+            client.expectReply(220);
+            client.expect("USER admin", 331);
+            client.expect("PASS admin123", 230);
+            client.expect("USER", 501);
+            client.expect("PASS incorrect", 503);
+            client.expect("PWD", 530);
+            client.expect("USER admin", 331);
+            client.expect("PASS incorrect", 530);
+            client.expect("PWD", 530);
+            client.expect("PASS admin123", 503);
+            client.expect("QUIT", 221);
+        }
+    }
+
+    private static void testListOptionParsing(int port) throws Exception {
+        try (FtpClient client = new FtpClient(port)) {
+            client.expectReply(220);
+            client.expect("USER admin", 331);
+            client.expect("PASS admin123", 230);
+            assertNotContains(client.downloadData("LIST /archive"), ".operator-note");
+            assertContains(client.downloadData("LIST -a /archive"), ".operator-note");
             client.expect("QUIT", 221);
         }
     }
@@ -240,7 +277,7 @@ public final class Trap21IntegrationTest {
         Files.writeString(expired, "expired", StandardCharsets.UTF_8);
         Files.setLastModifiedTime(expired, FileTime.from(Instant.now().minus(Duration.ofDays(31))));
 
-        VirtualFileSystem fileSystem = new VirtualFileSystem(temporary, 64, 2, 30);
+        VirtualFileSystem fileSystem = new VirtualFileSystem(temporary, 64, 2, 30, 100, 200);
         assertTrue(!Files.exists(expired), "Expired quarantine artifact was not pruned");
         byte[] content = "x".repeat(32).getBytes(StandardCharsets.UTF_8);
         fileSystem.capture("quota-a", "/incoming/a.bin", new ByteArrayInputStream(content), 32, false);
@@ -253,6 +290,64 @@ public final class Trap21IntegrationTest {
         }
         assertTrue(rejected, "Quarantine quota did not reject an additional upload");
         deleteRecursively(temporary);
+    }
+
+
+    private static void testVfsEntryBudgets() throws Exception {
+        Path temporary = Files.createTempDirectory("trap21-vfs-budget-");
+        try {
+            VirtualFileSystem seed = new VirtualFileSystem(temporary, 1024 * 1024, 100, 30, 100, 100);
+            int existingDirectories;
+            try (Stream<Path> paths = Files.walk(temporary.resolve("vfs"))) {
+                existingDirectories = (int) paths.filter(Files::isDirectory).count() - 1;
+            }
+            VirtualFileSystem initial = new VirtualFileSystem(
+                    temporary, 1024 * 1024, 100, 30, existingDirectories + 1, 100);
+            initial.makeDirectory("/incoming/one");
+            assertThrows(VirtualFileSystem.VfsEntryLimitExceededException.class,
+                    () -> initial.makeDirectory("/incoming/two"),
+                    "Directory budget allowed growth beyond its maximum");
+            initial.removeDirectory("/incoming/one");
+            initial.makeDirectory("/incoming/two");
+
+            int existingFiles;
+            try (Stream<Path> paths = Files.walk(temporary.resolve("vfs"))) {
+                existingFiles = (int) paths.filter(Files::isRegularFile).count();
+            }
+            VirtualFileSystem firstRun = new VirtualFileSystem(
+                    temporary, 1024 * 1024, 100, 30, 100, existingFiles + 1);
+            firstRun.capture("first", "/incoming/first.bin",
+                    new ByteArrayInputStream("first".getBytes(StandardCharsets.UTF_8)), 1024, false);
+            VirtualFileSystem secondRun = new VirtualFileSystem(
+                    temporary, 1024 * 1024, 100, 30, 100, existingFiles + 1);
+            assertThrows(VirtualFileSystem.VfsEntryLimitExceededException.class,
+                    () -> secondRun.capture("second", "/incoming/second.bin",
+                            new ByteArrayInputStream("second".getBytes(StandardCharsets.UTF_8)), 1024, false),
+                    "Persisted VFS placeholders bypassed the file budget after restart");
+        } finally {
+            deleteRecursively(temporary);
+        }
+    }
+
+    private static void testSessionWatchdog() throws Exception {
+        Path temporary = Files.createTempDirectory("trap21-session-watchdog-");
+        Trap21Config config = new Trap21Config(
+                InetAddress.getByName("127.0.0.1"), 0, 0, 0, "127.0.0.1", temporary,
+                30, 5, 5, 1, 1024, 1024 * 1024, 10, 30, 100, 100,
+                1024 * 1024, 2, 4, 4);
+        try (Trap21Server server = new Trap21Server(config); FtpClient client = new FtpClientAfterStart(server)) {
+            client.expectReply(220);
+            Thread.sleep(1_300L);
+            boolean closed = false;
+            try {
+                closed = client.readReplyOrNull() == null;
+            } catch (IOException expected) {
+                closed = true;
+            }
+            assertTrue(closed, "Absolute session watchdog did not close the control socket");
+        } finally {
+            deleteRecursively(temporary);
+        }
     }
 
     private static void testEventLogRotation() throws Exception {
@@ -311,13 +406,33 @@ public final class Trap21IntegrationTest {
         }
     }
 
+    private static void assertThrows(
+            Class<? extends Exception> expected,
+            ThrowingRunnable operation,
+            String message) throws Exception {
+        try {
+            operation.run();
+        } catch (Exception exception) {
+            if (expected.isInstance(exception)) {
+                return;
+            }
+            throw exception;
+        }
+        throw new AssertionError(message);
+    }
+
     private static void assertTrue(boolean condition, String message) {
         if (!condition) {
             throw new AssertionError(message);
         }
     }
 
-    private static final class FtpClient implements AutoCloseable {
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
+    private static class FtpClient implements AutoCloseable {
         private final Socket control;
         private final BufferedReader reader;
         private final BufferedWriter writer;
@@ -332,11 +447,15 @@ public final class Trap21IntegrationTest {
         }
 
         String readReply() throws IOException {
-            String line = reader.readLine();
+            String line = readReplyOrNull();
             if (line == null) {
                 throw new IOException("FTP server closed the control connection");
             }
             return line;
+        }
+
+        String readReplyOrNull() throws IOException {
+            return reader.readLine();
         }
 
         void expectReply(int code) throws IOException {
@@ -417,6 +536,17 @@ public final class Trap21IntegrationTest {
         @Override
         public void close() throws IOException {
             control.close();
+        }
+    }
+
+    private static final class FtpClientAfterStart extends FtpClient {
+        FtpClientAfterStart(Trap21Server server) throws IOException {
+            super(startAndGetPort(server));
+        }
+
+        private static int startAndGetPort(Trap21Server server) throws IOException {
+            server.start();
+            return server.port();
         }
     }
 }

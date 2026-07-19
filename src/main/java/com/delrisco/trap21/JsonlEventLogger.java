@@ -58,21 +58,21 @@ final class JsonlEventLogger implements Closeable {
                 StandardOpenOption.APPEND);
     }
 
-    synchronized void log(String eventType, Map<String, ?> values) {
+    synchronized boolean log(String eventType, Map<String, ?> values) {
         if (closed) {
-            return;
+            return false;
         }
         Instant now = clock.instant();
         try {
             ensureWriter();
             if ("COMMAND".equals(eventType) && suppressCommandEvent(now, values)) {
-                return;
+                return true;
             }
             if ("AUTH_ATTEMPT".equals(eventType)) {
                 if (Boolean.TRUE.equals(values.get("accepted"))) {
                     flushAuthWindow(now, values.get("sessionId"));
                 } else if (suppressFailedAuthEvent(now, values)) {
-                    return;
+                    return true;
                 }
             }
             if ("DISCONNECT".equals(eventType)) {
@@ -82,8 +82,10 @@ final class JsonlEventLogger implements Closeable {
             }
             writeEvent(now, eventType, values);
             healthy = true;
+            return true;
         } catch (IOException exception) {
             markFailure(exception);
+            return false;
         }
     }
 
@@ -263,6 +265,7 @@ final class JsonlEventLogger implements Closeable {
         event.put("timestamp", timestamp.toString());
         event.put("eventType", eventType);
         event.putAll(values);
+        event.remove("passwordRank");
 
         String encoded = toJson(event);
         long eventBytes = encoded.getBytes(StandardCharsets.UTF_8).length
