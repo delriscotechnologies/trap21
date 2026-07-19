@@ -17,9 +17,11 @@ RUN find src/test/java -name '*.java' -print | sort > test-sources.txt \
     && java -ea -cp build/main:build/test com.delrisco.trap21.Trap21IntegrationTest \
     && java -ea -cp build/main:build/test com.delrisco.trap21.JsonlEventLoggerRateLimitTest
 
-FROM eclipse-temurin:21-jre-alpine@sha256:3f08b13888f595cc49edabea7250ba69499ba25602b267da591720769400e08c AS runtime
+FROM eclipse-temurin:21-jre-noble@sha256:373787d1d45a87f084fda43e7de0e9acf5eedee049446efac738f13587ec4c64 AS runtime
 
-RUN addgroup -S trap21 && adduser -S -G trap21 trap21 \
+RUN groupadd --system --gid 101 trap21 \
+    && useradd --system --uid 100 --gid trap21 --no-create-home \
+        --home-dir /nonexistent --shell /usr/sbin/nologin trap21 \
     && mkdir -p /app/data \
     && chown -R trap21:trap21 /app
 WORKDIR /app

@@ -20,6 +20,10 @@ An independent watchdog closes the control socket, passive listener, and active 
 
 TRAP21 does not send the FTP banner unless the `CONNECT` event has been written and flushed successfully. New sessions are closed while telemetry persistence is unavailable.
 
+## Automated security checks
+
+The security workflow uploads every container vulnerability that Trivy classifies as HIGH or CRITICAL, including findings without an available fix, to GitHub code scanning. The same severities are release gates: the container-image job fails if any HIGH or CRITICAL vulnerability is present in the vulnerability database used for that run. The workflow also produces a CycloneDX SBOM and runs weekly so newly disclosed issues are reevaluated.
+
 ## Reporting
 
 Report security issues privately through the repository's GitHub Security Advisory interface. Include a minimal reproduction, affected version or commit, expected boundary, and observed impact. Do not include real credentials, malicious binaries, or sensitive third-party data in a public issue.
