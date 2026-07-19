@@ -30,6 +30,9 @@ final class JsonlEventLogger implements Closeable {
     private final Map<String, AuthWindow> authWindows = new HashMap<>();
     private BufferedWriter writer;
     private long currentBytes;
+    private boolean healthy = true;
+    private boolean closed;
+    private String lastFailureMessage;
 
     JsonlEventLogger(Path file, long maximumBytes, int maximumArchives) throws IOException {
         this(file, maximumBytes, maximumArchives, Clock.systemUTC());
@@ -56,8 +59,12 @@ final class JsonlEventLogger implements Closeable {
     }
 
     synchronized void log(String eventType, Map<String, ?> values) {
+        if (closed) {
+            return;
+        }
         Instant now = clock.instant();
         try {
+            ensureWriter();
             if ("COMMAND".equals(eventType) && suppressCommandEvent(now, values)) {
                 return;
             }
@@ -74,23 +81,88 @@ final class JsonlEventLogger implements Closeable {
                 flushAuthWindow(now, sessionValue);
             }
             writeEvent(now, eventType, values);
+            healthy = true;
         } catch (IOException exception) {
-            System.err.println("TRAP21 log write failed: " + exception.getMessage());
+            markFailure(exception);
         }
     }
 
     @Override
     public synchronized void close() throws IOException {
-        Instant now = clock.instant();
-        for (CommandWindow window : commandWindows.values()) {
-            writeCommandSuppressionSummary(now, window);
+        if (closed) {
+            return;
         }
-        for (AuthWindow window : authWindows.values()) {
-            writeAuthSuppressionSummary(now, window);
+        IOException failure = null;
+        try {
+            ensureWriter();
+            Instant now = clock.instant();
+            for (CommandWindow window : commandWindows.values()) {
+                writeCommandSuppressionSummary(now, window);
+            }
+            for (AuthWindow window : authWindows.values()) {
+                writeAuthSuppressionSummary(now, window);
+            }
+            commandWindows.clear();
+            authWindows.clear();
+            writer.close();
+            writer = null;
+        } catch (IOException exception) {
+            failure = exception;
+        } finally {
+            closed = true;
+            healthy = false;
+            closeWriterQuietly();
         }
-        commandWindows.clear();
-        authWindows.clear();
-        writer.close();
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    synchronized boolean isHealthy() {
+        if (closed) {
+            return false;
+        }
+        try {
+            ensureWriter();
+            return true;
+        } catch (IOException exception) {
+            markFailure(exception);
+            return false;
+        }
+    }
+
+    private void ensureWriter() throws IOException {
+        if (writer != null && healthy) {
+            return;
+        }
+        writer = openWriter();
+        currentBytes = Files.size(file);
+        hardenPermissions(file);
+        healthy = true;
+        lastFailureMessage = null;
+    }
+
+    private void markFailure(IOException exception) {
+        String message = String.valueOf(exception.getMessage());
+        boolean report = healthy || !message.equals(lastFailureMessage);
+        healthy = false;
+        closeWriterQuietly();
+        writer = null;
+        lastFailureMessage = message;
+        if (report) {
+            System.err.println("TRAP21 log write failed: " + message);
+        }
+    }
+
+    private void closeWriterQuietly() {
+        if (writer == null) {
+            return;
+        }
+        try {
+            writer.close();
+        } catch (IOException ignored) {
+            // Recovery will reopen the event file when persistence is available again.
+        }
     }
 
     private boolean suppressCommandEvent(Instant now, Map<String, ?> values) throws IOException {
@@ -191,7 +263,6 @@ final class JsonlEventLogger implements Closeable {
         event.put("timestamp", timestamp.toString());
         event.put("eventType", eventType);
         event.putAll(values);
-        event.remove("passwordRank");
 
         String encoded = toJson(event);
         long eventBytes = encoded.getBytes(StandardCharsets.UTF_8).length
@@ -207,6 +278,7 @@ final class JsonlEventLogger implements Closeable {
 
     private void rotate() throws IOException {
         writer.close();
+        writer = null;
         Files.deleteIfExists(archive(maximumArchives));
         for (int index = maximumArchives - 1; index >= 1; index--) {
             Path source = archive(index);
@@ -224,6 +296,7 @@ final class JsonlEventLogger implements Closeable {
         writer = openWriter();
         currentBytes = 0;
         hardenPermissions(file);
+        healthy = true;
     }
 
     private Path archive(int index) {

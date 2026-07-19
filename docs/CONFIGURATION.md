@@ -13,19 +13,23 @@ TRAP21 uses the following environment variables:
 | `TRAP21_PASSIVE_END` | `30009` | Last passive port |
 | `TRAP21_PUBLIC_HOST` | control address | IPv4 advertised by `PASV` |
 | `TRAP21_DATA_DIR` | `data` | VFS, telemetry, and quarantine root |
-| `TRAP21_IDLE_TIMEOUT` | `120` | Control idle timeout in seconds |
+| `TRAP21_IDLE_TIMEOUT` | `120` | Control inactivity timeout in seconds |
+| `TRAP21_MAX_SESSION_SECONDS` | `120` | Absolute lifetime of a control session and any passive listener it owns |
 | `TRAP21_COMMAND_TIMEOUT` | `15` | Absolute time to finish a command after its first byte |
-| `TRAP21_DATA_TIMEOUT` | `15` | Time allowed to establish or use a passive data connection |
+| `TRAP21_DATA_TIMEOUT` | `15` | Timeout for establishing or using a passive data connection |
 | `TRAP21_MAX_UPLOAD_BYTES` | `10485760` | Maximum upload size |
 | `TRAP21_MAX_QUARANTINE_BYTES` | `268435456` | Total retained quarantine-byte limit |
 | `TRAP21_MAX_QUARANTINE_FILES` | `4096` | Total retained quarantine-file limit |
 | `TRAP21_RETENTION_DAYS` | `30` | Age threshold used during quarantine pruning |
+| `TRAP21_MAX_VFS_DIRECTORIES` | `4096` | Maximum directories beneath the virtual root, including seeded directories |
 | `TRAP21_MAX_EVENT_LOG_BYTES` | `33554432` | Rotate the active JSONL log at this size |
 | `TRAP21_MAX_EVENT_ARCHIVES` | `5` | Rotated JSONL archives to retain |
 | `TRAP21_MAX_SESSIONS` | `64` | Concurrent session limit |
 | `TRAP21_MAX_SESSIONS_PER_IP` | `8` | Concurrent sessions allowed per source address |
 
-Telemetry limits are internal and do not throttle or alter FTP responses. For each session, TRAP21 retains up to 100 `COMMAND` events and 25 failed `AUTH_ATTEMPT` events per second. Additional events are represented by `COMMANDS_SUPPRESSED` and `AUTH_ATTEMPTS_SUPPRESSED` summaries. Successful authentication attempts and all upload, transfer, error, and lifecycle events are always retained. Authentication summaries record counts of distinct usernames and passwords without retaining each additional plaintext password.
+Telemetry rate limits do not throttle or alter FTP responses. For each session, TRAP21 retains up to 100 `COMMAND` events and 25 failed `AUTH_ATTEMPT` events per second. Additional events are represented by `COMMANDS_SUPPRESSED` and `AUTH_ATTEMPTS_SUPPRESSED` summaries. Successful authentication attempts and upload, transfer, error, and lifecycle events bypass rate suppression. If the event writer cannot persist evidence, it becomes unhealthy and new FTP sessions are refused until persistence recovers. Authentication summaries record counts of distinct usernames and passwords without retaining each additional plaintext password.
+
+The directory limit is initialized from the persisted virtual tree at startup. Each accepted `MKD`/`XMKD` reserves one slot; once the limit is reached, additional directory creation is rejected. Upload placeholders remain bounded separately by `TRAP21_MAX_QUARANTINE_FILES`.
 
 ## Remote deployment
 
