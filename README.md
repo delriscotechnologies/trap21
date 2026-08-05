@@ -142,6 +142,8 @@ TRAP21 is intentionally vulnerable at the decoy interface and intentionally boun
 | Container | The supplied image runs without root privileges or Linux capabilities and uses owner-only evidence permissions |
 | Execution | No shell, command execution, proxying, archive extraction, or malware execution |
 
+CI uses synthetic integration tests and a local Docker smoke test. These checks do not validate internet-facing deployments, external network controls, or behavior under sustained hostile traffic.
+
 Before deployment:
 
 1. Obtain written authorization for the network and address space.
