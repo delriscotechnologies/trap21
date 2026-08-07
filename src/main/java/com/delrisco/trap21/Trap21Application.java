@@ -1,19 +1,18 @@
 package com.delrisco.trap21;
 
 import java.io.IOException;
-import java.util.concurrent.CountDownLatch;
 
 public final class Trap21Application {
     private Trap21Application() {
     }
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) throws IOException, InterruptedException {
         Trap21Config config = Trap21Config.fromEnvironment();
         Trap21Server server = new Trap21Server(config);
         Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().unstarted(() -> closeQuietly(server)));
         server.start();
         printStartup(config, server.port());
-        new CountDownLatch(1).await();
+        server.awaitTermination();
     }
 
     private static void printStartup(Trap21Config config, int boundPort) {

@@ -9,14 +9,14 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 public final class Trap21Server implements AutoCloseable {
     private final Trap21Config config;
@@ -50,6 +50,9 @@ public final class Trap21Server implements AutoCloseable {
     }
 
     public synchronized void start() throws IOException {
+        if (sessions.isShutdown()) {
+            throw new IllegalStateException("TRAP21 is closed");
+        }
         if (!running.compareAndSet(false, true)) {
             throw new IllegalStateException("TRAP21 is already running");
         }
@@ -57,7 +60,6 @@ public final class Trap21Server implements AutoCloseable {
             controlListener = new ServerSocket();
             controlListener.setReuseAddress(true);
             controlListener.bind(new InetSocketAddress(config.bindAddress(), config.controlPort()));
-            acceptThread = Thread.ofPlatform().name("trap21-control-listener").start(this::acceptLoop);
             if (!logger.log("SERVER_STARTED", Map.of(
                     "bind", config.bindAddress().getHostAddress(),
                     "port", port(),
@@ -67,8 +69,17 @@ public final class Trap21Server implements AutoCloseable {
                     "quarantine", fileSystem.quarantine().toString()))) {
                 throw new IOException("Telemetry is unavailable; refusing to start the FTP listener");
             }
-        } catch (IOException exception) {
+            acceptThread = Thread.ofPlatform().name("trap21-control-listener").start(this::acceptLoop);
+        } catch (IOException | RuntimeException exception) {
             running.set(false);
+            if (controlListener != null) {
+                try {
+                    controlListener.close();
+                } catch (IOException closeException) {
+                    exception.addSuppressed(closeException);
+                }
+                controlListener = null;
+            }
             throw exception;
         }
     }
@@ -162,13 +173,15 @@ public final class Trap21Server implements AutoCloseable {
 
     @Override
     public synchronized void close() throws IOException {
-        if (!running.compareAndSet(true, false)) {
+        if (sessions.isShutdown()) {
             return;
         }
+        boolean wasRunning = running.getAndSet(false);
         IOException failure = null;
         try {
             if (controlListener != null) {
                 controlListener.close();
+                controlListener = null;
             }
         } catch (IOException exception) {
             failure = exception;
@@ -189,7 +202,9 @@ public final class Trap21Server implements AutoCloseable {
             Thread.currentThread().interrupt();
             sessions.shutdownNow();
         }
-        logger.log("SERVER_STOPPED", Map.of());
+        if (wasRunning) {
+            logger.log("SERVER_STOPPED", Map.of());
+        }
         try {
             logger.close();
         } catch (IOException exception) {

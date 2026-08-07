@@ -319,26 +319,35 @@ final class ClientSession {
     }
 
     private ServerSocket bindPassiveListener() throws IOException {
-        IOException lastFailure = null;
         if (config.passivePortStart() == 0 && config.passivePortEnd() == 0) {
-            ServerSocket listener = new ServerSocket();
-            listener.setReuseAddress(true);
-            listener.bind(new InetSocketAddress(config.bindAddress(), 0));
-            listener.setSoTimeout(config.dataTimeoutSeconds() * 1000);
-            return listener;
+            return bindPassivePort(0);
         }
+        IOException lastFailure = null;
         for (int port = config.passivePortStart(); port <= config.passivePortEnd(); port++) {
             try {
-                ServerSocket listener = new ServerSocket();
-                listener.setReuseAddress(true);
-                listener.bind(new InetSocketAddress(config.bindAddress(), port));
-                listener.setSoTimeout(config.dataTimeoutSeconds() * 1000);
-                return listener;
+                return bindPassivePort(port);
             } catch (IOException exception) {
                 lastFailure = exception;
             }
         }
         throw new IOException("No passive ports are available", lastFailure);
+    }
+
+    private ServerSocket bindPassivePort(int port) throws IOException {
+        ServerSocket listener = new ServerSocket();
+        try {
+            listener.setReuseAddress(true);
+            listener.bind(new InetSocketAddress(config.bindAddress(), port));
+            listener.setSoTimeout(config.dataTimeoutSeconds() * 1000);
+            return listener;
+        } catch (IOException exception) {
+            try {
+                listener.close();
+            } catch (IOException closeException) {
+                exception.addSuppressed(closeException);
+            }
+            throw exception;
+        }
     }
 
     private InetAddress advertisedAddress() throws IOException {
