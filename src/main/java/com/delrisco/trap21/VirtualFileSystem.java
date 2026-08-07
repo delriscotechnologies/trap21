@@ -9,7 +9,6 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -344,7 +343,7 @@ final class VirtualFileSystem {
         }
         validateFileName(fileName(targetVirtual));
         boolean directory = Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS);
-        Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+        Files.move(source, target);
         String descendantPrefix = sourceVirtual + "/";
         Map<String, CapturedUpload> moved = new LinkedHashMap<>();
         for (Map.Entry<String, CapturedUpload> entry : uploads.entrySet()) {
@@ -514,7 +513,6 @@ final class VirtualFileSystem {
         refreshQuarantineUsage();
         nextPruneAt = now.plus(Duration.ofHours(1));
     }
-
 
     private void refreshVfsUsage() throws IOException {
         int directories = 0;
