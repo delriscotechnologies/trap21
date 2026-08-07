@@ -10,8 +10,8 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.InetAddress;
 import java.net.Socket;
-import java.nio.file.FileSystemException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
@@ -19,8 +19,8 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Comparator;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -165,7 +165,6 @@ public final class Trap21IntegrationTest {
         }
     }
 
-
     private static void testAuthenticationStateReset(int port) throws Exception {
         try (FtpClient client = new FtpClient(port)) {
             client.expectReply(220);
@@ -241,6 +240,13 @@ public final class Trap21IntegrationTest {
             client.expect("RNFR /users/admin/rename-source", 350);
             client.expect("RNTO /users/admin/rename-target", 250);
             assertEquals(INITIAL_UPLOAD, client.downloadData("RETR /users/admin/rename-target/probe.txt"));
+
+            client.uploadData("STOR /users/admin/replace-source.txt", INITIAL_UPLOAD);
+            client.expect("RNFR /users/admin/replace-source.txt", 350);
+            client.expect("RNTO /users/admin/credentials-old.txt", 550);
+            assertContains(
+                    client.downloadData("RETR /users/admin/credentials-old.txt"),
+                    "Legacy vendor credentials were migrated");
             client.expect("QUIT", 221);
         }
     }
@@ -375,16 +381,19 @@ public final class Trap21IntegrationTest {
                 InetAddress.getByName("127.0.0.1"), 0, 0, 0, "127.0.0.1", temporary,
                 30, 5, 5, 1, 1024, 1024 * 1024, 10, 30, 100, 100,
                 1024 * 1024, 2, 4, 4);
-        try (Trap21Server server = new Trap21Server(config); FtpClient client = new FtpClientAfterStart(server)) {
-            client.expectReply(220);
-            Thread.sleep(1_300L);
-            boolean closed = false;
-            try {
-                closed = client.readReplyOrNull() == null;
-            } catch (IOException expected) {
-                closed = true;
+        try (Trap21Server server = new Trap21Server(config)) {
+            server.start();
+            try (FtpClient client = new FtpClient(server.port())) {
+                client.expectReply(220);
+                Thread.sleep(1_300L);
+                boolean closed = false;
+                try {
+                    closed = client.readReplyOrNull() == null;
+                } catch (IOException expected) {
+                    closed = true;
+                }
+                assertTrue(closed, "Absolute session watchdog did not close the control socket");
             }
-            assertTrue(closed, "Absolute session watchdog did not close the control socket");
         } finally {
             deleteRecursively(temporary);
         }
@@ -472,14 +481,12 @@ public final class Trap21IntegrationTest {
         void run() throws Exception;
     }
 
-    private static class FtpClient implements AutoCloseable {
+    private static final class FtpClient implements AutoCloseable {
         private final Socket control;
         private final BufferedReader reader;
         private final BufferedWriter writer;
-        private final int port;
 
         FtpClient(int port) throws IOException {
-            this.port = port;
             this.control = new Socket("127.0.0.1", port);
             this.control.setSoTimeout(5_000);
             this.reader = new BufferedReader(new InputStreamReader(control.getInputStream(), StandardCharsets.UTF_8));
@@ -576,17 +583,6 @@ public final class Trap21IntegrationTest {
         @Override
         public void close() throws IOException {
             control.close();
-        }
-    }
-
-    private static final class FtpClientAfterStart extends FtpClient {
-        FtpClientAfterStart(Trap21Server server) throws IOException {
-            super(startAndGetPort(server));
-        }
-
-        private static int startAndGetPort(Trap21Server server) throws IOException {
-            server.start();
-            return server.port();
         }
     }
 }
