@@ -8,13 +8,6 @@
   A medium-interaction FTP honeypot built to look real and leave useful telemetry.
 </p>
 
-<p align="center">
-  <a href="#quick-start">Quick Start</a> ·
-  <a href="#inside-the-trap">Client View</a> ·
-  <a href="docs/CONFIGURATION.md">Configuration</a> ·
-  <a href="SECURITY.md">Security</a>
-</p>
-
 ---
 
 TRAP21 makes an FTP endpoint look worth exploring. Selected weak credentials open role-aware views of a decoy filesystem, uploads are preserved in quarantine, and each session becomes structured JSON Lines evidence.
