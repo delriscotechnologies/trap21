@@ -54,7 +54,6 @@ final class Evidence {
         if (safe.isBlank()) safe = "upload.bin";
         if (safe.length() > 80) safe = safe.substring(0, 80);
         Path dir = quarantine.resolve(sessionId);
-        Files.createDirectories(dir);
         Path file = dir.resolve(UUID.randomUUID() + "_" + safe);
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         long size = 0, reserved = 0;
@@ -62,7 +61,9 @@ final class Evidence {
             if (quarantineFiles >= MAX_FILES) throw new LimitException("QUARANTINE_LIMIT");
             quarantineFiles++;
         }
-        try (OutputStream out = Files.newOutputStream(file, StandardOpenOption.CREATE_NEW)) {
+        try {
+            Files.createDirectories(dir);
+            try (OutputStream out = Files.newOutputStream(file, StandardOpenOption.CREATE_NEW)) {
             byte[] buffer = new byte[16 * 1024];
             for (int n; (n = in.read(buffer)) != -1;) {
                 if (size + n > MAX_UPLOAD) throw new LimitException("UPLOAD_LIMIT");
@@ -72,9 +73,11 @@ final class Evidence {
                 }
                 size += n; digest.update(buffer, 0, n); out.write(buffer, 0, n);
             }
+            }
         } catch (Exception e) {
             synchronized (quotaLock) { quarantineBytes -= reserved; quarantineFiles--; }
             Files.deleteIfExists(file);
+            try { Files.deleteIfExists(dir); } catch (DirectoryNotEmptyException ignored) {}
             throw e;
         }
         return new Capture(file, size, HexFormat.of().formatHex(digest.digest()));
