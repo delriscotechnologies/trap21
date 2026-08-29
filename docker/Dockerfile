@@ -19,12 +19,12 @@ RUN groupadd --system --gid 101 trap21 \
 
 WORKDIR /app
 COPY --from=build /tmp/trap21.jar /app/trap21.jar
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod 0555 /app/docker-entrypoint.sh
+COPY docker/entrypoint.sh /app/entrypoint.sh
+RUN chmod 0555 /app/entrypoint.sh
 
 USER trap21
 ENV TRAP21_BIND=0.0.0.0 \
     TRAP21_DATA_DIR=/app/data
 
 EXPOSE 2121 30000-30009
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]

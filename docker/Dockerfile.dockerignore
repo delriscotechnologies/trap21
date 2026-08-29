@@ -1,6 +1,9 @@
 .git
 .github
 .vscode
+.idea
 build
 *.log
+.env
+docker/.env
 README.md

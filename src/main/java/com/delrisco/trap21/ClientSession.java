@@ -7,7 +7,7 @@ import java.util.*;
 
 final class ClientSession {
     private static final String USER = "ftpuser", PASS = "87654321";
-    private static final int MAX_COMMAND = 4096;
+    private static final int MAX_COMMAND = 4096, MAX_SESSION_SECONDS = 300;
     private static final Map<String, byte[]> FILES = Map.of(
             "/pub/README.txt", bytes("Managed File Transfer Gateway\r\nUse assigned credentials for partner transfers.\r\n"),
             "/pub/partners.txt", bytes("northwind\r\ncontoso\r\nfabrikam\r\n"),
@@ -34,8 +34,10 @@ final class ClientSession {
         in = new BufferedReader(new InputStreamReader(control.getInputStream(), StandardCharsets.UTF_8));
         out = new BufferedWriter(new OutputStreamWriter(control.getOutputStream(), StandardCharsets.UTF_8));
         log("CONNECT"); send(220, "Authorized business use only");
+        long deadline = System.nanoTime() + MAX_SESSION_SECONDS * 1_000_000_000L;
         try {
             for (String line; (line = readLine()) != null;) {
+                if (System.nanoTime() > deadline) { send(421, "Session lifetime exceeded."); return; }
                 if (line.isBlank()) { send(500, "Empty command."); continue; }
                 int p = line.indexOf(' ');
                 String cmd = (p < 0 ? line : line.substring(0, p)).toUpperCase(Locale.ROOT);
@@ -56,6 +58,7 @@ final class ClientSession {
         switch (cmd) {
             case "USER" -> { username = arg.toLowerCase(Locale.ROOT); authenticated = false; send(331, "Password required."); }
             case "PASS" -> {
+                if (username == null) { send(503, "Login with USER first."); break; }
                 authenticated = USER.equals(username) && PASS.equals(arg);
                 evidence.log("AUTH_ATTEMPT", "sessionId", id, "sourceIp", ip(), "username", String.valueOf(username),
                         "password", arg, "accepted", authenticated);
@@ -74,18 +77,18 @@ final class ClientSession {
     }
 
     private void command(String cmd, String arg) throws IOException {
-        switch (cmd) {
+        try { switch (cmd) {
             case "PWD" -> send(257, "\"" + cwd + "\"");
             case "CWD" -> cwd(arg);
             case "CDUP" -> cwd("..");
-            case "TYPE" -> send(arg.equalsIgnoreCase("I") || arg.equalsIgnoreCase("A") ? 200 : 504, "Type accepted.");
+            case "TYPE" -> { boolean ok = arg.equalsIgnoreCase("I") || arg.equalsIgnoreCase("A"); send(ok ? 200 : 504, ok ? "Type accepted." : "Unsupported TYPE."); }
             case "PASV" -> passive(false);
             case "EPSV" -> passive(true);
             case "LIST" -> list(arg);
             case "RETR" -> retr(arg);
             case "STOR" -> stor(arg);
             default -> send(502, "Command not implemented.");
-        }
+        } } catch (IllegalArgumentException e) { send(550, "Invalid path."); }
     }
 
     private void cwd(String arg) throws IOException {
@@ -167,13 +170,13 @@ final class ClientSession {
         } catch (SocketTimeoutException e) { send(425, "Data connection timed out."); return null; }
     }
 
-    private String path(String arg) throws IOException {
+    private String path(String arg) {
         String raw = arg.startsWith("/") ? arg : cwd + "/" + arg;
         Deque<String> parts = new ArrayDeque<>();
         for (String part : raw.split("/+")) {
             if (part.isBlank() || part.equals(".")) continue;
             if (part.equals("..")) { if (!parts.isEmpty()) parts.removeLast(); continue; }
-            if (part.length() > 255 || part.chars().anyMatch(c -> c < 32 || c == '\\' || c == ':')) throw new IOException("Invalid path");
+            if (part.length() > 255 || part.chars().anyMatch(c -> c < 32 || c == '\\' || c == ':')) throw new IllegalArgumentException("Invalid path");
             parts.add(part);
         }
         return parts.isEmpty() ? "/" : "/" + String.join("/", parts);
