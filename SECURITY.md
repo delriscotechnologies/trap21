@@ -11,7 +11,7 @@ A security issue is behavior that crosses the containment boundary, including:
 - bypassing the upload or quarantine limits in a way that compromises the host;
 - exposing captured evidence to unintended local users in the supplied container deployment.
 
-The supported container runs as a non-root user with a read-only root filesystem, dropped Linux capabilities, `no-new-privileges`, and a dedicated writable evidence volume. Keep those controls intact and apply network egress restrictions outside the container for remote deployments.
+The supported container runs as a non-root user with a read-only root filesystem, dropped Linux capabilities, `no-new-privileges`, a dedicated writable evidence volume, and an ephemeral `/tmp` tmpfs. Keep those controls intact and apply network egress restrictions outside the container for remote deployments.
 
 TRAP21 stores presented FTP passwords and uploaded files as evidence. Treat the evidence volume as sensitive and potentially hostile. Never execute captured files and never reuse captured credentials against another system.
 
