@@ -11,10 +11,12 @@ import java.util.stream.Stream;
 
 final class Evidence {
     static final long MAX_UPLOAD = 10L * 1024 * 1024, MAX_QUARANTINE = 256L * 1024 * 1024;
+    private static final int MAX_FILES = 4096;
     private static final long MAX_LOG = 16L * 1024 * 1024;
     private final Path data, quarantine, log;
     private final Object quotaLock = new Object();
     private long quarantineBytes;
+    private int quarantineFiles;
 
     Evidence(Path dataDir) throws IOException {
         data = dataDir.toAbsolutePath().normalize();
@@ -23,7 +25,7 @@ final class Evidence {
         Files.createDirectories(quarantine);
         if (Files.isSymbolicLink(quarantine)) throw new IOException("Quarantine cannot be a symbolic link");
         try (Stream<Path> files = Files.walk(quarantine)) {
-            for (Path file : files.filter(Files::isRegularFile).toList()) quarantineBytes += Files.size(file);
+            for (Path file : files.filter(Files::isRegularFile).toList()) { quarantineBytes += Files.size(file); quarantineFiles++; }
         }
     }
 
@@ -52,11 +54,16 @@ final class Evidence {
         if (safe.isBlank()) safe = "upload.bin";
         if (safe.length() > 80) safe = safe.substring(0, 80);
         Path dir = quarantine.resolve(sessionId);
-        Files.createDirectories(dir);
         Path file = dir.resolve(UUID.randomUUID() + "_" + safe);
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         long size = 0, reserved = 0;
-        try (OutputStream out = Files.newOutputStream(file, StandardOpenOption.CREATE_NEW)) {
+        synchronized (quotaLock) {
+            if (quarantineFiles >= MAX_FILES) throw new LimitException("QUARANTINE_LIMIT");
+            quarantineFiles++;
+        }
+        try {
+            Files.createDirectories(dir);
+            try (OutputStream out = Files.newOutputStream(file, StandardOpenOption.CREATE_NEW)) {
             byte[] buffer = new byte[16 * 1024];
             for (int n; (n = in.read(buffer)) != -1;) {
                 if (size + n > MAX_UPLOAD) throw new LimitException("UPLOAD_LIMIT");
@@ -66,9 +73,11 @@ final class Evidence {
                 }
                 size += n; digest.update(buffer, 0, n); out.write(buffer, 0, n);
             }
+            }
         } catch (Exception e) {
-            synchronized (quotaLock) { quarantineBytes -= reserved; }
+            synchronized (quotaLock) { quarantineBytes -= reserved; quarantineFiles--; }
             Files.deleteIfExists(file);
+            try { Files.deleteIfExists(dir); } catch (DirectoryNotEmptyException ignored) {}
             throw e;
         }
         return new Capture(file, size, HexFormat.of().formatHex(digest.digest()));

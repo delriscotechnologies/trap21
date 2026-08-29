@@ -1,7 +1,10 @@
+name: trap21
+
 services:
   trap21:
     build:
-      context: .
+      context: ..
+      dockerfile: docker/Dockerfile
       target: runtime
     container_name: trap21
     restart: unless-stopped

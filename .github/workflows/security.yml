@@ -64,7 +64,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build runtime image
-        run: docker build --target runtime -t trap21:scan .
+        run: docker build -f docker/Dockerfile --target runtime -t trap21:scan .
 
       - name: Scan image and produce SARIF
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
