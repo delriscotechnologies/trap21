@@ -5,21 +5,19 @@
 </p>
 
 <p align="center">
-  A medium-interaction FTP honeypot built to look real and leave useful telemetry.
+  A medium-interaction FTP honeypot that presents a decoy filesystem and records structured evidence.
 </p>
 
 ---
 
-TRAP21 makes an FTP endpoint look worth exploring. Selected weak credentials open role-aware views of a decoy filesystem, uploads are preserved in quarantine, and each session becomes structured JSON Lines evidence.
-
-To the visitor, it behaves like an FTP server. To the operator, the FTP client is the entire interface—there is no web dashboard.
+TRAP21 exposes a deliberately weak FTP service for authorized observation. Selected credentials open role-specific views of a decoy filesystem, downloads serve seeded content, uploads are preserved in quarantine, and session activity is written as JSON Lines.
 
 > [!CAUTION]
-> TRAP21 is intentionally vulnerable. Deploy it only on systems and networks you own or are explicitly authorized to monitor. Never mount host directories containing real data, credentials, or executables.
+> TRAP21 is intentionally vulnerable at the decoy interface. Deploy it only on systems and networks you own or are explicitly authorized to monitor. Never mount host directories that contain real data, credentials, or executables.
 
-## Quick Start
+## Install
 
-TRAP21 requires **Git** and **Docker with Compose**. Clone it, create the local environment file, and start the service:
+You need Git and Docker with Compose. The default configuration publishes FTP only on the local machine.
 
 ```powershell
 git clone https://github.com/delriscotechnologies/trap21.git
@@ -30,120 +28,74 @@ docker compose up --build
 
 On macOS or Linux, replace `Copy-Item` with `cp`.
 
-The default deployment stays on the local machine:
-
-- FTP control: `127.0.0.1:21`
-- Passive data: `127.0.0.1:30000-30009`
-
-Keep Docker Compose running and connect from a second terminal:
+In a second terminal, connect with a built-in decoy account:
 
 ```powershell
 curl.exe --user "ftpuser:87654321" "ftp://127.0.0.1/"
 ```
 
-See [Configuration](docs/CONFIGURATION.md) for remote deployment, data persistence, environment variables, and built-in accounts.
+The default deployment publishes:
 
-## How TRAP21 Works
+- FTP control on `127.0.0.1:21`
+- Passive data ports on `127.0.0.1:30000-30009`
 
-A session moves through five stages:
+## What it does
 
-1. A client opens a real FTP control connection over TCP.
-2. Selected weak or anonymous credentials map the client to an account profile.
-3. The profile receives its own view of the decoy filesystem.
-4. Passive transfers serve decoy content or preserve uploaded bytes in quarantine.
-5. Commands, credentials, transfers, and hashes become JSONL evidence.
+1. Accepts real FTP control connections over TCP.
+2. Maps selected weak or anonymous credentials to a decoy access profile.
+3. Presents a bounded virtual filesystem without exposing the host filesystem.
+4. Serves seeded files and preserves uploaded bytes in quarantine.
+5. Records connections, authentication attempts, commands, transfers, hashes, and session outcomes as JSONL events.
 
-TRAP21 supports the common command set expected by standard FTP clients and scanners. Transfers are passive-only; active mode (`PORT` and `EPRT`) and FTP over TLS are deliberately unavailable.
+Transfers are passive-only. Active mode (`PORT` and `EPRT`) and FTP over TLS are intentionally unavailable.
 
-<details>
-<summary><strong>View supported FTP commands</strong></summary>
+## Output
 
-```text
-USER PASS QUIT NOOP SYST FEAT HELP CLNT
-PWD XPWD CWD XCWD CDUP XCUP
-TYPE MODE STRU OPTS
-PASV EPSV LIST NLST RETR STOR APPE
-SIZE MDTM MKD XMKD RMD XRMD DELE
-RNFR RNTO STAT ABOR
+Compose stores evidence in the named volume `trap21-data`. Inside the container, events are appended to `/app/data/events.jsonl` and uploads are stored under `/app/data/quarantine/<session-id>/`.
+
+View events while the service is running:
+
+```bash
+docker compose exec trap21 tail -f /app/data/events.jsonl
 ```
 
-`APPE` appends to the current virtual file while preserving each captured artifact in quarantine. `TYPE A` converts between local line endings and FTP NVT ASCII. `ABOR` interrupts an active transfer after its passive data connection has been established. A transfer still waiting for that connection ends when `TRAP21_DATA_TIMEOUT` expires.
-
-</details>
-
-## Inside the Trap
-
-A successful login looks like an ordinary managed FTP service:
-
-```text
-220 Authorized business use only
-C: USER ftpuser
-S: 331 Password required for ftpuser.
-C: PASS 87654321
-S: 230 User logged in, proceed.
-C: PWD
-S: 257 "/" is current directory.
-```
-
-Different account profiles receive different views of seeded enterprise-style directories and decoy documents. TRAP21 never reveals its product name, honeypot purpose, Java implementation, or operator branding to the FTP client.
-
-## Evidence Collected
-
-Events are appended to `data/events.jsonl` as the session unfolds:
-
-| Signal | Captured detail |
+| Signal | Recorded evidence |
 | --- | --- |
 | Connection | Source address and session lifecycle |
 | Authentication | Presented username and password, acceptance, and profile |
 | FTP activity | Commands, paths, downloads, and transfer status |
-| Upload | Path, byte count, SHA-256 hash, and quarantine location |
+| Upload | Virtual path, byte count, SHA-256 hash, and quarantine location |
 
-<details>
-<summary><strong>View example JSONL events</strong></summary>
+Authentication attempts may contain real passwords entered by visitors. Protect the evidence volume and restrict operator access.
 
-```json
-{"timestamp":"2026-07-17T16:42:18Z","eventType":"AUTH_ATTEMPT","sessionId":"...","sourceIp":"192.0.2.45","username":"ftpuser","presentedPassword":"87654321","accepted":true,"profile":"TRANSFER"}
-```
+## Configuration
 
-```json
-{"timestamp":"2026-07-17T16:43:01Z","eventType":"UPLOAD","sessionId":"...","sourceIp":"192.0.2.45","username":"ftpuser","command":"STOR","path":"/incoming/probe.txt","bytes":2941,"sha256":"...","quarantineFile":"...","status":"CAPTURED"}
-```
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for environment variables, built-in accounts, passive FTP settings, data limits, retention, and authorized remote deployment.
 
-</details>
+Changing `TRAP21_LISTEN_HOST` from `127.0.0.1` exposes the service beyond the local machine. Before doing so, set `TRAP21_PUBLIC_HOST` correctly and enforce network isolation, inbound filtering, and outbound denial.
 
-Individually retained authentication attempts store presented passwords in plaintext as honeypot telemetry. Protect the data directory, limit operator access, and treat accidental use of real credentials as sensitive data.
-
-High-rate activity does not change the FTP responses seen by the visitor. For each session, the logger retains up to 100 `COMMAND` events and 25 failed `AUTH_ATTEMPT` events per second. Additional events are represented by `COMMANDS_SUPPRESSED` or `AUTH_ATTEMPTS_SUPPRESSED` summaries. Authentication successes, uploads, transfer results, failures, and lifecycle events bypass rate suppression. Authentication summaries count SHA-256 fingerprints instead of retaining the additional plaintext values; each distinct count is capped at 256 per window and `distinctCountsTruncated` is emitted when either cap is exceeded.
-
-### Quarantined uploads
-
-Uploaded bytes are stored beneath `data/quarantine/<session-id>/`. The virtual tree receives a placeholder and metadata mapping, allowing the client to list and retrieve the captured upload while TRAP21 is running.
-
-TRAP21 never executes, parses, unpacks, or forwards uploaded content. Deleting a file through FTP removes its virtual presence but preserves the quarantine artifact. Quarantine files and bytes, persisted VFS files and directories, control-session lifetime, and event-log growth are bounded by configurable limits. Age-based pruning runs at startup and is checked before new captures; artifacts still mapped into the live virtual tree are retained for the life of that server process.
-
-The supplied container starts with a restrictive `077` umask and normalizes existing evidence to owner-only permissions: directories use `0700` and files use `0600`.
-
-## Scope and Safeguards
-
-TRAP21 is intentionally vulnerable at the decoy interface and intentionally bounded at the host boundary:
+## Scope and limits
 
 | Boundary | Enforcement |
 | --- | --- |
-| Filesystem | Paths stay inside a dedicated virtual root; symbolic links are rejected; persisted file and directory counts are capped |
-| Passive data | Connections must originate from the control-session source address; waits expire through `TRAP21_DATA_TIMEOUT`; an independent watchdog closes the control socket, passive listener, and active transfer at `TRAP21_MAX_SESSION_SECONDS` |
-| Resources | Commands, deadlines, absolute session lifetime, VFS growth, upload storage, telemetry, logs, and sessions are bounded |
-| Container | The supplied image runs without root privileges or Linux capabilities and uses owner-only evidence permissions |
+| Filesystem | Dedicated virtual root, rejected symbolic links, and bounded file and directory counts |
+| Uploads | Size, file-count, retention, and total-quarantine limits |
+| Sessions | Idle, command, data, absolute-lifetime, global, and per-source limits |
+| Telemetry | Log rotation and per-session rate summaries for high-volume activity |
+| Container | Non-root user, read-only root filesystem, no added Linux capabilities, and `no-new-privileges` |
 | Execution | No shell, command execution, proxying, archive extraction, or malware execution |
 
-CI uses synthetic integration tests and a local Docker smoke test. These checks do not validate internet-facing deployments, external network controls, or behavior under sustained hostile traffic.
+CI uses synthetic integration tests and a local Docker smoke test. These checks do not validate internet-facing deployments or sustained hostile traffic.
 
-Before deployment:
+Before remote deployment:
 
-1. Obtain written authorization for the network and address space.
-2. Isolate the honeypot from production assets.
+1. Obtain written authorization for the address and network.
+2. Isolate the honeypot from production systems.
 3. Deny unnecessary outbound traffic.
-4. Do not reuse captured credentials against third-party systems.
-5. Establish retention and incident-handling procedures for logs and uploads.
+4. Never reuse captured credentials against another system.
+5. Define evidence retention and incident-handling procedures.
+
+Use `docker compose down` to stop the service without deleting the evidence volume. The command `docker compose down -v` permanently deletes that volume and should be used only when the evidence is no longer required.
 
 See [SECURITY.md](SECURITY.md) for the threat boundary and reporting process.
 
