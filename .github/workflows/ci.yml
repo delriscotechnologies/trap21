@@ -23,22 +23,26 @@ jobs:
 
       - name: Smoke test
         run: |
+          trap 'echo "--- TRAP21 logs ---"; docker compose logs || true' ERR
           docker compose up --build --detach
+
+          ready=0
           for attempt in $(seq 1 20); do
+            echo "Readiness attempt $attempt"
             if curl --fail --silent --show-error --user "ftpuser:87654321" "ftp://127.0.0.1/pub/README.txt" >/dev/null; then
+              ready=1
               break
-            fi
-            if [ "$attempt" -eq 20 ]; then
-              docker compose logs
-              exit 1
             fi
             sleep 1
           done
+          test "$ready" -eq 1
 
+          echo "Testing upload"
           printf 'ci evidence\n' | curl --fail --silent --show-error \
             --user "ftpuser:87654321" --upload-file - \
             "ftp://127.0.0.1/incoming/ci-evidence.txt"
 
+          echo "Checking containment and evidence"
           docker compose exec -T trap21 sh -c '
             test "$(id -u)" -ne 0 &&
             test -w /app/data &&
@@ -47,8 +51,8 @@ jobs:
             evidence="$(find /app/data/quarantine -type f -print -quit)" &&
             test -n "$evidence" &&
             test "$(stat -c %a "$evidence")" = 600 &&
-            grep -q '"eventType":"UPLOAD"' /app/data/events.jsonl &&
-            grep -q '"sha256"' /app/data/events.jsonl
+            grep -q '"'"'"eventType"'"'":"'"'"UPLOAD"'"'"' /app/data/events.jsonl &&
+            grep -q '"'"'"sha256"'"'"' /app/data/events.jsonl
           '
 
       - name: Tear down
