@@ -1,4 +1,4 @@
-FROM eclipse-temurin:21-jdk-alpine@sha256:1ff763083f2993d57d0bf374ab10bb3e2cb873af6c13a04458ebbd3e0337dc76 AS build
+FROM eclipse-temurin:21-jdk-alpine@sha256:6ea5548706b60ac0a602eaf48af74792cbab012d90e811ca8db6184b16b5c3d6 AS build
 
 WORKDIR /workspace
 COPY src/main/java ./src/main/java
@@ -9,7 +9,7 @@ RUN find src/main/java -name '*.java' -print | sort > sources.txt \
         --main-class com.delrisco.trap21.Trap21Application \
         -C build .
 
-FROM eclipse-temurin:21-jre-noble@sha256:373787d1d45a87f084fda43e7de0e9acf5eedee049446efac738f13587ec4c64 AS runtime
+FROM eclipse-temurin:21-jre-noble@sha256:96975602e131485862eb8cd32927face8a06d7591a5e865944b634a701d9df72 AS runtime
 
 RUN groupadd --system --gid 101 trap21 \
     && useradd --system --uid 100 --gid trap21 --no-create-home \
