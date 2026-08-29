@@ -1,46 +1,33 @@
 package com.delrisco.trap21;
 
-import java.io.IOException;
+import java.net.InetAddress;
+import java.nio.file.Path;
 
 public final class Trap21Application {
     private Trap21Application() {
     }
 
-    public static void main(String[] args) throws IOException, InterruptedException {
-        Trap21Config config = Trap21Config.fromEnvironment();
-        Trap21Server server = new Trap21Server(config);
-        Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().unstarted(() -> closeQuietly(server)));
+    public static void main(String[] args) throws Exception {
+        InetAddress bind = InetAddress.getByName(env("TRAP21_BIND", "127.0.0.1"));
+        String publicHost = env("TRAP21_PUBLIC_HOST", "127.0.0.1");
+        Path dataDir = Path.of(env("TRAP21_DATA_DIR", "data")).toAbsolutePath().normalize();
+
+        Trap21Server server = new Trap21Server(bind, publicHost, dataDir);
+        Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().unstarted(() -> {
+            try {
+                server.close();
+            } catch (Exception ignored) {
+                // JVM shutdown is best-effort.
+            }
+        }));
         server.start();
-        printStartup(config, server.port());
+        System.out.printf("TRAP21 listening on %s:%d%n", bind.getHostAddress(), server.port());
+        System.out.printf("Evidence: %s%n", dataDir);
         server.awaitTermination();
     }
 
-    private static void printStartup(Trap21Config config, int boundPort) {
-        System.out.println();
-        System.out.println("TRAP21");
-        System.out.println("FTP DECEPTION HONEYPOT");
-        System.out.println("Del Risco Technologies");
-        System.out.println();
-        System.out.printf("Control listener  : %s:%d%n", config.bindAddress().getHostAddress(), boundPort);
-        System.out.printf("Passive range     : %d-%d%n", config.passivePortStart(), config.passivePortEnd());
-        System.out.printf("Virtual root      : %s%n", config.dataDirectory().resolve("vfs").toAbsolutePath().normalize());
-        System.out.printf("Event log         : %s%n", config.dataDirectory().resolve("events.jsonl").toAbsolutePath().normalize());
-        System.out.printf("Upload quarantine : %s%n", config.dataDirectory().resolve("quarantine").toAbsolutePath().normalize());
-        System.out.printf("Quarantine limits : %d bytes / %d files / %d days%n",
-                config.maxQuarantineBytes(), config.maxQuarantineFiles(), config.retentionDays());
-        System.out.printf("Session limits    : %d seconds / %d total / %d per source%n",
-                config.maxSessionSeconds(), config.maxSessions(), config.maxSessionsPerIp());
-        System.out.printf("VFS limits        : %d directories / %d files%n",
-                config.maxVfsDirectories(), config.maxVfsFiles());
-        System.out.println("Status            : listening");
-        System.out.println();
-    }
-
-    private static void closeQuietly(Trap21Server server) {
-        try {
-            server.close();
-        } catch (IOException exception) {
-            System.err.println("TRAP21 shutdown failed: " + exception.getMessage());
-        }
+    private static String env(String name, String fallback) {
+        String value = System.getenv(name);
+        return value == null || value.isBlank() ? fallback : value.trim();
     }
 }

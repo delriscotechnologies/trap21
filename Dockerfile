@@ -2,20 +2,12 @@ FROM eclipse-temurin:21-jdk-alpine@sha256:1ff763083f2993d57d0bf374ab10bb3e2cb873
 
 WORKDIR /workspace
 COPY src/main/java ./src/main/java
-RUN find src/main/java -name '*.java' -print | sort > main-sources.txt \
-    && mkdir -p build/main \
-    && javac --release 21 -encoding UTF-8 -Xlint:all -d build/main @main-sources.txt \
+RUN find src/main/java -name '*.java' -print | sort > sources.txt \
+    && mkdir -p build \
+    && javac --release 21 -encoding UTF-8 -Xlint:all -d build @sources.txt \
     && jar --create --file /tmp/trap21.jar \
         --main-class com.delrisco.trap21.Trap21Application \
-        -C build/main .
-
-FROM build AS test
-COPY src/test/java ./src/test/java
-RUN find src/test/java -name '*.java' -print | sort > test-sources.txt \
-    && mkdir -p build/test \
-    && javac --release 21 -encoding UTF-8 -Xlint:all -cp build/main -d build/test @test-sources.txt \
-    && java -ea -cp build/main:build/test com.delrisco.trap21.Trap21IntegrationTest \
-    && java -ea -cp build/main:build/test com.delrisco.trap21.JsonlEventLoggerRateLimitTest
+        -C build .
 
 FROM eclipse-temurin:21-jre-noble@sha256:373787d1d45a87f084fda43e7de0e9acf5eedee049446efac738f13587ec4c64 AS runtime
 
@@ -24,30 +16,15 @@ RUN groupadd --system --gid 101 trap21 \
         --home-dir /nonexistent --shell /usr/sbin/nologin trap21 \
     && mkdir -p /app/data \
     && chown -R trap21:trap21 /app
+
 WORKDIR /app
 COPY --from=build /tmp/trap21.jar /app/trap21.jar
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod 0555 /app/docker-entrypoint.sh
-USER trap21
 
+USER trap21
 ENV TRAP21_BIND=0.0.0.0 \
-    TRAP21_PORT=2121 \
-    TRAP21_PASSIVE_START=30000 \
-    TRAP21_PASSIVE_END=30009 \
-    TRAP21_DATA_DIR=/app/data \
-    TRAP21_IDLE_TIMEOUT=120 \
-    TRAP21_COMMAND_TIMEOUT=15 \
-    TRAP21_DATA_TIMEOUT=15 \
-    TRAP21_MAX_SESSION_SECONDS=120 \
-    TRAP21_MAX_QUARANTINE_BYTES=268435456 \
-    TRAP21_MAX_QUARANTINE_FILES=4096 \
-    TRAP21_RETENTION_DAYS=30 \
-    TRAP21_MAX_VFS_DIRECTORIES=4096 \
-    TRAP21_MAX_VFS_FILES=8192 \
-    TRAP21_MAX_EVENT_LOG_BYTES=33554432 \
-    TRAP21_MAX_EVENT_ARCHIVES=5 \
-    TRAP21_MAX_SESSIONS=64 \
-    TRAP21_MAX_SESSIONS_PER_IP=8
+    TRAP21_DATA_DIR=/app/data
 
 EXPOSE 2121 30000-30009
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
