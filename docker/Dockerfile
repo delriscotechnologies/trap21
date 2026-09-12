@@ -9,7 +9,7 @@ RUN find src/main/java -name '*.java' -print | sort > sources.txt \
         --main-class com.delrisco.trap21.Trap21Application \
         -C build .
 
-FROM eclipse-temurin:21-jre-noble@sha256:96975602e131485862eb8cd32927face8a06d7591a5e865944b634a701d9df72 AS runtime
+FROM eclipse-temurin:21-jre-noble@sha256:d35199d74a3b2dff1bfb435d9adde4ef974e74a7d2a4fcb3079063c55926edb5 AS runtime
 
 RUN groupadd --system --gid 101 trap21 \
     && useradd --system --uid 100 --gid trap21 --no-create-home \
