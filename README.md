@@ -73,7 +73,7 @@ The FTP service does not execute uploads, provide a shell, proxy traffic, or exp
 
 Docker deployment files are kept under `docker/`. Java source files are under `src/main/java/`.
 
-Dependency versions are pinned and maintained manually. Security scans produce reports without blocking the lab on CVE findings.
+Dependency versions are pinned and maintained manually.
 
 See [SECURITY.md](SECURITY.md) for the intended security boundary.
 
