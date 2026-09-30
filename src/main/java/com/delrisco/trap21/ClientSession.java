@@ -21,7 +21,9 @@ final class ClientSession {
     private final String id = UUID.randomUUID().toString();
     private BufferedReader in;
     private BufferedWriter out;
-    private ServerSocket passive;
+    private volatile ServerSocket passive;
+    private volatile Socket transfer;
+    private volatile boolean expired;
     private String cwd = "/", username;
     private boolean authenticated;
 
@@ -33,11 +35,13 @@ final class ClientSession {
         control.setSoTimeout(Trap21Application.IDLE_SECONDS * 1000);
         in = new BufferedReader(new InputStreamReader(control.getInputStream(), StandardCharsets.UTF_8));
         out = new BufferedWriter(new OutputStreamWriter(control.getOutputStream(), StandardCharsets.UTF_8));
-        log("CONNECT"); send(220, "Authorized business use only");
-        long deadline = System.nanoTime() + MAX_SESSION_SECONDS * 1_000_000_000L;
+        Thread expiry = Thread.ofVirtual().start(() -> {
+            try { Thread.sleep(MAX_SESSION_SECONDS * 1000L); expired = true; closeConnections(); }
+            catch (InterruptedException ignored) {}
+        });
         try {
+            log("CONNECT"); send(220, "Authorized business use only");
             for (String line; (line = readLine()) != null;) {
-                if (System.nanoTime() > deadline) { send(421, "Session lifetime exceeded."); return; }
                 if (line.isBlank()) { send(500, "Empty command."); continue; }
                 int p = line.indexOf(' ');
                 String cmd = (p < 0 ? line : line.substring(0, p)).toUpperCase(Locale.ROOT);
@@ -49,8 +53,11 @@ final class ClientSession {
         } catch (SocketTimeoutException e) {
             try { send(421, "Control connection timed out."); } catch (IOException ignored) {}
             log("TIMEOUT");
+        } catch (SocketException e) {
+            if (!expired) throw e;
+            log("TIMEOUT");
         } finally {
-            closePassive(); log("DISCONNECT");
+            expiry.interrupt(); closeConnections(); log("DISCONNECT");
         }
     }
 
@@ -101,9 +108,10 @@ final class ClientSession {
         closePassive();
         for (int port = Trap21Application.PASSIVE_START; port <= Trap21Application.PASSIVE_END; port++) {
             try {
-                passive = new ServerSocket(); passive.setReuseAddress(true);
-                passive.bind(new InetSocketAddress(bind, port));
-                passive.setSoTimeout(Trap21Application.DATA_SECONDS * 1000);
+                ServerSocket listener = new ServerSocket(); passive = listener;
+                listener.setReuseAddress(true);
+                listener.bind(new InetSocketAddress(bind, port));
+                listener.setSoTimeout(Trap21Application.DATA_SECONDS * 1000);
                 if (epsv) send(229, "Entering Extended Passive Mode (|||" + port + "|).");
                 else {
                     InetAddress a = InetAddress.getByName(publicHost);
@@ -143,7 +151,7 @@ final class ClientSession {
 
     private void stor(String arg) throws IOException {
         String target = path(arg);
-        if (!target.startsWith("/incoming/") || target.equals("/incoming/")) { send(550, "Uploads are only allowed in /incoming."); return; }
+        if (!target.startsWith("/incoming/")) { send(550, "Uploads are only allowed in /incoming."); return; }
         try (Socket data = data("Opening data connection for upload.")) {
             if (data == null) return;
             Evidence.Capture c = evidence.capture(id, target.substring(target.lastIndexOf('/') + 1), data.getInputStream());
@@ -158,16 +166,19 @@ final class ClientSession {
     }
 
     private Socket data(String message) throws IOException {
-        ServerSocket listener = passive; passive = null;
+        ServerSocket listener = passive;
         if (listener == null) { send(425, "Use PASV or EPSV first."); return null; }
-        send(150, message);
         try (listener) {
-            Socket data = listener.accept(); data.setSoTimeout(Trap21Application.DATA_SECONDS * 1000);
+            send(150, message);
+            Socket data = listener.accept(); transfer = data;
+            if (control.isClosed()) throw new SocketException("Control connection closed");
+            data.setSoTimeout(Trap21Application.DATA_SECONDS * 1000);
             if (!data.getInetAddress().equals(control.getInetAddress())) {
                 data.close(); send(425, "Data source rejected."); return null;
             }
             return data;
         } catch (SocketTimeoutException e) { send(425, "Data connection timed out."); return null; }
+        finally { if (passive == listener) passive = null; }
     }
 
     private String path(String arg) {
@@ -202,15 +213,20 @@ final class ClientSession {
 
     private String readLine() throws IOException {
         StringBuilder line = new StringBuilder();
-        for (int c; (c = in.read()) != -1;) {
+        for (int c, count = 0; (c = in.read()) != -1;) {
+            if (++count > MAX_COMMAND) throw new IOException("Command too long");
             if (c == '\n') return line.toString();
-            if (c != '\r') { if (line.length() >= MAX_COMMAND) throw new IOException("Command too long"); line.append((char)c); }
+            if (c != '\r') line.append((char)c);
         }
         return line.isEmpty() ? null : line.toString();
     }
 
     private void send(int code, String message) throws IOException { out.write(code + " " + message + "\r\n"); out.flush(); }
-    private void closePassive() { if (passive != null) try { passive.close(); } catch (IOException ignored) {} passive = null; }
+    private void closePassive() { ServerSocket listener = passive; passive = null; close(listener); }
+    private void closeConnections() { close(control); closePassive(); close(transfer); }
+    private static void close(Closeable connection) {
+        if (connection != null) try { connection.close(); } catch (IOException ignored) {}
+    }
     private void log(String type) { evidence.log(type, "sessionId", id, "sourceIp", ip()); }
     private String ip() { return control.getInetAddress().getHostAddress(); }
     private static byte[] bytes(String s) { return s.getBytes(StandardCharsets.UTF_8); }

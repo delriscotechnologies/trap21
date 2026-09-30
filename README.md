@@ -1,19 +1,18 @@
 <h1 align="center">TRAP21</h1>
 
 <p align="center">
-  A small FTP honeypot for capturing credentials, activity, and uploaded files.
+  A Java 21 FTP honeypot for capturing credentials, activity, and uploads.
 </p>
 
 ---
 
-TRAP21 exposes an intentionally weak plaintext FTP service backed by a small decoy filesystem. The built-in weak credential is deliberate. Visitors can browse decoy files, download them, and upload files to `/incoming`; uploads are quarantined and recorded with SHA-256 hashes in JSONL telemetry.
+TRAP21 simulates a plaintext FTP service with deliberately weak credentials and decoy files. It records client activity as JSONL and quarantines uploads with SHA-256 hashes.
 
-> [!CAUTION]
-> Run TRAP21 only on systems and networks you own or are explicitly authorized to monitor. Captured credentials and uploads may be sensitive or hostile.
+> Use TRAP21 only on systems and networks you own or have explicit permission to monitor. Captured credentials and uploads may be sensitive or hostile.
 
 ## Install
 
-You need Git and Docker with Compose.
+You need Git and Docker with Compose. Java 21 runs inside the container.
 
 ```bash
 git clone https://github.com/delriscotechnologies/trap21.git
@@ -35,7 +34,7 @@ curl --user "ftpuser:87654321" "ftp://127.0.0.1/pub/README.txt"
 - Exposes a small read-only decoy filesystem.
 - Accepts uploads only under `/incoming`.
 - Quarantines uploaded bytes without executing them.
-- Records connections, presented credentials, commands, downloads, uploads, and SHA-256 hashes as JSONL.
+- Records connections, USER/PASS login attempts, commands, downloads, uploads, and SHA-256 hashes as JSONL.
 
 Active FTP and FTP over TLS are intentionally unavailable. Commands outside TRAP21's supported subset are rejected rather than emulated.
 
@@ -55,7 +54,7 @@ View events while TRAP21 is running:
 docker compose --env-file docker/.env -f docker/compose.yml exec trap21 tail -f /app/data/events.jsonl
 ```
 
-The active event log rotates at 16 MiB and keeps one previous archive. Individual uploads are limited to 10 MiB. Quarantine is limited to 256 MiB and 4096 files. FTP sessions have a five-minute maximum lifetime in addition to the idle timeout.
+The event log rotates at 16 MiB and keeps one archive. Uploads are limited to 10 MiB each; quarantine is limited to 256 MiB and 4096 files. Sessions expire after five minutes. Idle timeouts are 120 seconds for control connections and 15 seconds for data connections.
 
 For an authorized remote deployment, change these values in `docker/.env`:
 
@@ -72,7 +71,9 @@ TRAP21 is a deliberately limited honeypot, not a production FTP server. The supp
 
 The FTP service does not execute uploads, provide a shell, proxy traffic, or expose host files. Passive data connections are accepted only from the same source address as the FTP control connection.
 
-Docker deployment files are kept under `docker/`. 
+Docker deployment files are kept under `docker/`. Java source files are under `src/main/java/`.
+
+Dependency versions are pinned and maintained manually. Security scans produce reports without blocking the lab on CVE findings.
 
 See [SECURITY.md](SECURITY.md) for the intended security boundary.
 

@@ -2,6 +2,8 @@
 
 TRAP21 is intentionally weak at the decoy FTP interface. The built-in weak credential, plaintext FTP, captured passwords, downloadable decoy files, and quarantined uploads are expected behavior.
 
+Security scans are informational. Evaluate findings against the containment boundary below before changing deliberate lab behavior.
+
 A security issue is behavior that crosses the containment boundary, including:
 
 - reading or modifying host files outside the dedicated TRAP21 data directory;
