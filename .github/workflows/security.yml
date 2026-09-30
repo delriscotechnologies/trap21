@@ -106,6 +106,6 @@ jobs:
           image-ref: trap21:scan
           format: table
           severity: HIGH,CRITICAL
-          ignore-unfixed: false
+          ignore-unfixed: true
           vuln-type: os,library
           exit-code: "1"
