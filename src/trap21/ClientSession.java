@@ -1,4 +1,4 @@
-package com.delrisco.trap21;
+package trap21;
 
 import java.io.*;
 import java.net.*;

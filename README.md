@@ -71,7 +71,7 @@ TRAP21 is a deliberately limited honeypot, not a production FTP server. The supp
 
 The FTP service does not execute uploads, provide a shell, proxy traffic, or expose host files. Passive data connections are accepted only from the same source address as the FTP control connection.
 
-Docker deployment files are kept under `docker/`. Java source files are under `src/main/java/`.
+Docker deployment files are kept under `docker/`. Java source files are under `src/trap21/`.
 
 Dependency versions are pinned and maintained manually.
 
